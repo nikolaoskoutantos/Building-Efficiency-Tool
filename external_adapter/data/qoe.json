@@ -1,0 +1,22 @@
+{
+    "ID": "qoe-test-001",
+    "services_evaluated": ["openweather", "openmeteo"],
+    "qoe_results": {
+      "openweather": {
+        "response_time_ms": 250,
+        "data_completeness": "95%",
+        "reliability_score": "90%",
+        "accuracy_score": "88%",
+        "availability": "Online"
+      },
+      "openmeteo": {
+        "response_time_ms": 180,
+        "data_completeness": "98%",
+        "reliability_score": "92%",
+        "accuracy_score": "90%",
+        "availability": "Online"
+      }
+    },
+    "overall_qoe_score": "89.5%"
+}
+  
