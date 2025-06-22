@@ -6,9 +6,14 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const dotenv = require('dotenv');
 const apiKeyAuth = require('./middleware/apiKeyAuth');
-
 const app = express();
 const port = process.env.PORT || 8080;
+const cors = require('cors');
+let allowedOrigins = process.env.CORS_ORIGIN || '*';
+if (allowedOrigins !== '*') {
+  allowedOrigins = allowedOrigins.split(',').map(origin => origin.trim());
+}
+app.use(cors({ origin: allowedOrigins }));
 
 // Load environment variables from .env file
 dotenv.config();
