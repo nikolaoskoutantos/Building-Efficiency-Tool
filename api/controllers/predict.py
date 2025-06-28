@@ -20,7 +20,7 @@ class PredictorCreate(PredictorBase):
 class PredictorRead(PredictorBase):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 def get_db():
     db = SessionLocal()

@@ -18,7 +18,7 @@ class RateCreate(RateBase):
 class RateRead(RateBase):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 def get_db():
     db = SessionLocal()

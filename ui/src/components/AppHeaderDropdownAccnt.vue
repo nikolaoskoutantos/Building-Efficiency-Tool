@@ -3,12 +3,37 @@ import avatar from '@/assets/images/avatars/8.jpg'
 import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth.js'
 import Alerts from '@/components/Alerts.vue'
+import { useRouter } from 'vue-router'
 
 const auth = useAuthStore()
+const router = useRouter()
 const showAlerts = ref(false)
 
-function handleLogout() {
-  auth.logout()
+async function handleLogout() {
+  try {
+    console.log('🚪 Initiating logout from dropdown...')
+    await auth.logout()
+    
+    // Add a small delay to ensure state is fully propagated
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // Force navigate to login with page reload to clear any lingering state
+    console.log('🔄 Navigating to login...')
+    await router.push('/login')
+    
+    // Optional: Force a page reload to completely reset state
+    // Uncomment if you still see race conditions
+    // window.location.reload()
+    
+  } catch (error) {
+    console.error('❌ Logout failed:', error)
+    
+    // Force reset state on error
+    auth.forceResetState()
+    
+    // Ensure we navigate to login even on error
+    await router.push('/login')
+  }
 }
 </script>
 

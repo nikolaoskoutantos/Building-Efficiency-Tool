@@ -32,12 +32,30 @@ createAppKit({
 
 // ✅ Vue App Setup
 const app = createApp(App)
+const pinia = createPinia()
+
 app.use(router)
-app.use(createPinia())
+app.use(pinia)
 app.use(CoreuiVue)
 app.provide('icons', icons)
 app.component('CIcon', CIcon)
 app.component('DocsComponents', DocsComponents)
 app.component('DocsExample', DocsExample)
 app.component('DocsIcons', DocsIcons)
-app.mount('#app')
+
+// Initialize auth store and JWT token validation
+import { useAuthStore } from './stores/auth'
+
+// Initialize auth store before mounting the app
+const initializeApp = async () => {
+  const authStore = useAuthStore(pinia)
+  
+  // Wait for auth initialization to complete
+  await authStore.initializeAuth()
+  
+  // Now mount the app after auth is initialized
+  app.mount('#app')
+}
+
+// Initialize the app
+initializeApp()

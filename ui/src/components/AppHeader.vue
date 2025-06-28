@@ -34,11 +34,27 @@ const { disconnect } = useDisconnect()
 
 async function logout() {
   try {
-    await disconnect()           // ✅ disconnect from wallet
-    auth.clearWalletData?.()     // optional: clear any stored auth data
-    router.push('/login')        // redirect to login
+    console.log('🚪 AppHeader: Starting logout...')
+    
+    // Call the proper auth store logout method (this will clear JWT, call backend, disconnect wallet)
+    await auth.logout()
+    
+    console.log('✅ AppHeader: Logout successful, redirecting to login')
+    
+    // Add delay to ensure state propagation
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // Force redirect with replace to avoid back navigation issues
+    await router.replace('/login')
+    
   } catch (err) {
-    console.error('Logout failed:', err)
+    console.error('❌ AppHeader logout failed:', err)
+    
+    // Force reset state on error
+    auth.forceResetState()
+    
+    // Even if logout fails, redirect to login
+    await router.replace('/login')
   }
 }
 

@@ -20,8 +20,24 @@ const router = useRouter()
 const servicesStore = useServicesStore()
 const { services } = storeToRefs(servicesStore)
 
-function logout() {
-  auth.logout()
+async function logout() {
+  try {
+    console.log('🚪 Dashboard: Starting logout...')
+    await auth.logout()
+    
+    // Add delay to ensure state propagation
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    console.log('🔄 Dashboard: Navigating to login...')
+    await router.push('/login')
+  } catch (error) {
+    console.error('❌ Dashboard logout failed:', error)
+    
+    // Force reset state on error
+    auth.forceResetState()
+    
+    await router.push('/login')
+  }
 }
 
 const progressGroupExample1 = [

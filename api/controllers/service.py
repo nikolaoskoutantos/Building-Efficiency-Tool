@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.service import Service
+from controllers.auth import get_current_user
 from typing import List
 from pydantic import BaseModel, Field
 
@@ -23,7 +24,7 @@ class ServiceCreate(ServiceBase):
 class ServiceRead(ServiceBase):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 def get_db():
     db = SessionLocal()
@@ -33,7 +34,7 @@ def get_db():
         db.close()
 
 @router.post("/", response_model=ServiceRead)
-def create_service(service: ServiceCreate, db: Session = Depends(get_db)):
+def create_service(service: ServiceCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     db_service = Service(**service.dict())
     db.add(db_service)
     db.commit()
@@ -52,7 +53,7 @@ def read_service(service_id: int, db: Session = Depends(get_db)):
     return service
 
 @router.put("/{service_id}", response_model=ServiceRead)
-def update_service(service_id: int, service: ServiceCreate, db: Session = Depends(get_db)):
+def update_service(service_id: int, service: ServiceCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail="Service not found")
@@ -63,7 +64,7 @@ def update_service(service_id: int, service: ServiceCreate, db: Session = Depend
     return db_service
 
 @router.delete("/{service_id}")
-def delete_service(service_id: int, db: Session = Depends(get_db)):
+def delete_service(service_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail="Service not found")

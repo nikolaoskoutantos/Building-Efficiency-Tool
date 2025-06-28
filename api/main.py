@@ -39,7 +39,12 @@ insert_mock_data()
 # Allow CORS for local development (adjust origins as needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",  # Vue.js dev server
+        "http://localhost:5173",  # Vite dev server (alternative port)
+        "http://127.0.0.1:3000",  # Alternative localhost format
+        "http://127.0.0.1:5173",  # Alternative localhost format
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

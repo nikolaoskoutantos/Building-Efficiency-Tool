@@ -20,7 +20,7 @@ class SensorDataCreate(SensorDataBase):
 class SensorDataRead(SensorDataBase):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 def get_db():
     db = SessionLocal()

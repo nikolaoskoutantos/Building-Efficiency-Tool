@@ -12,11 +12,14 @@
   "dependencies": {
     "@chainlink/external-adapter": "^0.2.3",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
+    "dotenv": "^16.5.0",
+    "form-data": "^4.0.3",
     "ipfs-http-client": "^60.0.1",
+    "node-fetch": "^3.3.2",
     "pm2": "^5.4.3",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
+    "tmp": "^0.2.3",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
