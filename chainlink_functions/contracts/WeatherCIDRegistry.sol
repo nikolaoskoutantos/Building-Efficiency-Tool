@@ -27,7 +27,7 @@ contract WeatherCIDRegistry is FunctionsClient {
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Not admin");
-        _;
+        _;  
     }
 
     modifier canAccessLocation(string memory dataType, string memory lat, string memory lon) {

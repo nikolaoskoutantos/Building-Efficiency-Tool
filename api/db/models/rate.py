@@ -1,6 +1,10 @@
+"""
+Rate model for encrypted user ratings.
+"""
+
 from sqlalchemy import Column, Integer, Float, ForeignKey, String, DateTime, Text
 from sqlalchemy.sql import func
-from db import Base
+from ..connection import Base
 
 class Rate(Base):
     __tablename__ = "rates"

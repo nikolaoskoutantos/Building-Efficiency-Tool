@@ -2,60 +2,110 @@
   <CRow>
     <CCol>
       <CCard class="mb-4">
+        <CCardHeader>
+          <h5 class="mb-0">Available Services</h5>
+        </CCardHeader>
         <CCardBody>
-          <CTable align="middle" class="mb-0 border" hover responsive>
-            <CTableHead color="light">
-              <CTableRow>
-                <CTableHeaderCell scope="col"></CTableHeaderCell>
-                <CTableHeaderCell scope="col"></CTableHeaderCell>
-                <CTableHeaderCell scope="col">ID</CTableHeaderCell>
-                <CTableHeaderCell scope="col">Service Name</CTableHeaderCell>
-                <CTableHeaderCell scope="col">Cost (€)</CTableHeaderCell>
-                <CTableHeaderCell scope="col">Description</CTableHeaderCell>
-                <CTableHeaderCell scope="col">Actions</CTableHeaderCell>
-              </CTableRow>
-            </CTableHead>
-            <CTableBody>
-              <template v-for="service in services" :key="'row-' + service.id">
-                <CTableRow>
-                  <CTableDataCell>
-                    <CFormCheck v-model="service.checked" />
-                  </CTableDataCell>
-                  <CTableDataCell>
-                    <CButton size="sm" @click="toggleExpand(service.id)">
-                      {{ expanded[service.id] ? '▼' : '▶' }}
-                    </CButton>
-                  </CTableDataCell>
-                  <CTableDataCell>{{ service.id }}</CTableDataCell>
-                  <CTableDataCell>{{ service.name }}</CTableDataCell>
-                  <CTableDataCell>{{ service.cost }}</CTableDataCell>
-                  <CTableDataCell>{{ service.description }}</CTableDataCell>
-                  <CTableDataCell>
-                    <div class="d-flex flex-column align-items-start gap-1">
-                      <div class="d-flex gap-2">
-                        <CButton color="primary" size="sm" @click="invokeService(service)">Invoke</CButton>
-                        <CButton color="info" size="sm" @click="fetchCID(service)">Fetch CID</CButton>
-                      </div>
-                      <div v-if="CIDMap[service.id]" class="text-success small mt-1">
-                        CID: {{ CIDMap[service.id] }}
-                      </div>
-                    </div>
-                  </CTableDataCell>
-                </CTableRow>
+          <!-- Loading State -->
+          <div v-if="loading" class="text-center py-4">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">Loading services...</span>
+            </div>
+            <p class="mt-2">Loading services from database...</p>
+          </div>
 
-                <CTableRow v-if="expanded[service.id]" :key="'expand-' + service.id">
-                  <CTableDataCell colspan="7">
-                    <strong>Metadata:</strong>
-                    <ul>
-                      <li><strong>Endpoint:</strong> {{ service.metadata.endpoint }}</li>
-                      <li><strong>Version:</strong> {{ service.metadata.version }}</li>
-                      <li><strong>Owner:</strong> {{ service.metadata.owner }}</li>
-                    </ul>
-                  </CTableDataCell>
+          <!-- Error State -->
+          <div v-else-if="error" class="alert alert-danger">
+            <strong>Error loading services:</strong> {{ error }}
+            <CButton 
+              color="outline-primary" 
+              size="sm" 
+              class="ms-2" 
+              @click="servicesStore.fetchServices()"
+            >
+              Retry
+            </CButton>
+          </div>
+
+          <!-- Services Table -->
+          <div v-else-if="services.length > 0">
+            <CTable align="middle" class="mb-0 border" hover responsive>
+              <CTableHead color="light">
+                <CTableRow>
+                  <CTableHeaderCell scope="col"></CTableHeaderCell>
+                  <CTableHeaderCell scope="col"></CTableHeaderCell>
+                  <CTableHeaderCell scope="col">ID</CTableHeaderCell>
+                  <CTableHeaderCell scope="col">Service Name</CTableHeaderCell>
+                  <CTableHeaderCell scope="col">Cost</CTableHeaderCell>
+                  <CTableHeaderCell scope="col">Description</CTableHeaderCell>
+                  <CTableHeaderCell scope="col">Actions</CTableHeaderCell>
                 </CTableRow>
-              </template>
-            </CTableBody>
-          </CTable>
+              </CTableHead>
+              <CTableBody>
+                <template v-for="service in services" :key="'row-' + service.id">
+                  <CTableRow>
+                    <CTableDataCell>
+                      <CFormCheck 
+                        :model-value="service.checked" 
+                        @update:model-value="toggleServiceSelection(service)"
+                      />
+                    </CTableDataCell>
+                    <CTableDataCell>
+                      <CButton size="sm" @click="toggleExpand(service.id)">
+                        {{ expanded[service.id] ? '▼' : '▶' }}
+                      </CButton>
+                    </CTableDataCell>
+                    <CTableDataCell>{{ service.id }}</CTableDataCell>
+                    <CTableDataCell>
+                      <strong>{{ service.name }}</strong>
+                    </CTableDataCell>
+                    <CTableDataCell>
+                      <span v-if="service.link_cost">{{ service.link_cost }} LINK</span>
+                      <span v-else>-</span>
+                    </CTableDataCell>
+                    <CTableDataCell>
+                      <span class="text-muted">{{ service.description || 'No description' }}</span>
+                    </CTableDataCell>
+                    <CTableDataCell>
+                      <div class="d-flex flex-column align-items-start gap-1">
+                        <div class="d-flex gap-2">
+                          <CButton color="primary" size="sm" @click="invokeService(service)">Invoke</CButton>
+                          <CButton color="info" size="sm" @click="fetchCID(service)">Fetch CID</CButton>
+                        </div>
+                        <div v-if="CIDMap[service.id]" class="text-success small mt-1">
+                          CID: {{ CIDMap[service.id] }}
+                        </div>
+                      </div>
+                    </CTableDataCell>
+                  </CTableRow>
+
+                  <CTableRow v-if="expanded[service.id]" :key="'expand-' + service.id">
+                    <CTableDataCell colspan="7">
+                      <div class="p-3 bg-light">
+                        <strong>Service Details:</strong>
+                        <ul class="mt-2">
+                          <li><strong>Smart Contract ID:</strong> {{ service.smart_contract_id || 'N/A' }}</li>
+                          <li><strong>Callback Wallets:</strong> {{ service.callback_wallet_addresses || 'N/A' }}</li>
+                          <li v-if="service.input_parameters">
+                            <strong>Input Parameters:</strong> 
+                            <pre class="small">{{ JSON.stringify(service.input_parameters, null, 2) }}</pre>
+                          </li>
+                        </ul>
+                      </div>
+                    </CTableDataCell>
+                  </CTableRow>
+                </template>
+              </CTableBody>
+            </CTable>
+          </div>
+
+          <!-- Empty State -->
+          <div v-else class="text-center py-4">
+            <p class="text-muted">No services found in the database.</p>
+            <CButton color="primary" @click="servicesStore.fetchServices()">
+              Refresh
+            </CButton>
+          </div>
         </CCardBody>
       </CCard>
     </CCol>
@@ -63,16 +113,26 @@
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, onMounted } from 'vue'
 import { useServicesStore } from '@/stores/services'
 import { storeToRefs } from 'pinia'
 import { ethers } from 'ethers'
 
 const servicesStore = useServicesStore()
-const { services } = storeToRefs(servicesStore)
+const { services, loading, error } = storeToRefs(servicesStore)
 
 const expanded = reactive({})
 const CIDMap = reactive({})
+
+// Load services from API on component mount
+onMounted(async () => {
+  try {
+    await servicesStore.fetchServices()
+    console.log('✅ Services loaded from database')
+  } catch (err) {
+    console.error('❌ Failed to load services:', err)
+  }
+})
 
 const CONTRACT_ADDRESS = '0x9946587cd79d59737B99D6a0b5A499584Fa3863d'
 const ABI = [
@@ -166,6 +226,11 @@ async function fetchCID(service) {
     console.error(err)
     alert('Fetching CID failed: ' + err.message)
   }
+}
+
+// Toggle service selection
+function toggleServiceSelection(service) {
+  servicesStore.toggleChecked(service.id)
 }
 </script>
 

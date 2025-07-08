@@ -1,10 +1,10 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+"""
+Database module - redirects to the new db package structure.
+This file maintains backward compatibility for existing imports.
+"""
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./dev.db"
+# Import everything from the new db package
+from db.connection import engine, SessionLocal, Base, get_db
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# Re-export for backward compatibility
+__all__ = ["engine", "SessionLocal", "Base", "get_db"]

@@ -10,6 +10,11 @@ const config = {
       logout: '/auth/logout',
       me: '/auth/me'
     },
+    rates: {
+      submit: '/rates/submit',
+      myRatings: '/rates/my-ratings',
+      serviceScore: '/rates/service/{serviceId}/score'
+    },
     health: '/health',
     services: '/services',
     weather: '/weather',

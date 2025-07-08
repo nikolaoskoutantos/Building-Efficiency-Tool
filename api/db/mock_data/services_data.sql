@@ -1,14 +1,12 @@
--- Services Initial Data - SQL INSERT statements for populating the services table
+-- Services Initial Data - PostgreSQL INSERT statements for populating the services table
 -- File: services_data.sql
 -- 
 -- This file contains INSERT statements to populate the services table with initial data
--- Run this file against your SQLite database to add sample services
+-- Compatible with PostgreSQL database
 --
--- Usage: 
--- sqlite3 dev.db < services_data.sql
--- or execute these statements through your SQLite client
+-- Usage: Execute through psycopg2 or psql
 
--- Insert sample services into the services table
+-- Insert sample services into the services table (PostgreSQL compatible)
 INSERT INTO services (
     name, 
     description, 
@@ -16,7 +14,10 @@ INSERT INTO services (
     link_cost, 
     callback_wallet_addresses, 
     input_parameters, 
-    knowledge_asset
+    knowledge_asset,
+    is_active,
+    created_at,
+    updated_at
 ) VALUES 
 -- Weather Monitoring Service
 (
@@ -25,8 +26,11 @@ INSERT INTO services (
     '0x1234567890abcdef1234567890abcdef12345678',
     0.01,
     '0xabcdef1234567890abcdef1234567890abcdef12',
-    '{"location": {"type": "string", "required": true}, "metrics": {"type": "array", "default": ["temperature", "humidity", "pressure"]}, "interval": {"type": "integer", "default": 3600}}',
-    '{"data_source": "openweather_api", "accuracy": "high", "update_frequency": "hourly", "coverage": "global"}'
+    '{"location": {"type": "string", "required": true}, "metrics": {"type": "array", "default": ["temperature", "humidity", "pressure"]}, "interval": {"type": "integer", "default": 3600}}'::jsonb,
+    '{"data_source": "openweather_api", "accuracy": "high", "update_frequency": "hourly", "coverage": "global"}'::jsonb,
+    true,
+    NOW(),
+    NOW()
 ),
 
 -- IoT Sensor Service
@@ -36,8 +40,11 @@ INSERT INTO services (
     '0x2345678901bcdef12345678901bcdef123456789',
     0.005,
     '0xbcdef12345678901bcdef12345678901bcdef123',
-    '{"sensor_id": {"type": "string", "required": true}, "data_type": {"type": "string", "required": true}, "frequency": {"type": "integer", "default": 60}, "threshold": {"type": "float", "default": 0.0}}',
-    '{"protocol": "mqtt", "encryption": "tls", "data_format": "json", "storage": "time_series"}'
+    '{"sensor_id": {"type": "string", "required": true}, "data_type": {"type": "string", "required": true}, "frequency": {"type": "integer", "default": 60}, "threshold": {"type": "float", "default": 0.0}}'::jsonb,
+    '{"protocol": "mqtt", "encryption": "tls", "data_format": "json", "storage": "time_series"}'::jsonb,
+    true,
+    NOW(),
+    NOW()
 ),
 
 -- AI Prediction Service
@@ -47,7 +54,7 @@ INSERT INTO services (
     '0x3456789012cdef123456789012cdef1234567890',
     0.02,
     '0xcdef123456789012cdef123456789012cdef1234',
-    '{"model_type": {"type": "string", "required": true}, "input_data": {"type": "object", "required": true}, "confidence_threshold": {"type": "float", "default": 0.8}, "prediction_horizon": {"type": "integer", "default": 24}}',
+    '{"model_type": {"type": "string", "required": true}, "input_data": {"type": "object", "required": true}, "confidence_threshold": {"type": "float", "default": 0.8}, "prediction_horizon": {"type": "integer", "default": 24}}'::jsonb,
     '{"framework": "tensorflow", "model_version": "2.1", "accuracy": 0.92, "training_data": "historical_sensor_data"}'
 ),
 

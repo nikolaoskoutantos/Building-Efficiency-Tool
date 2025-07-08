@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.service import Service
 from controllers.auth import get_current_user
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/services", tags=["Services"])
@@ -11,12 +11,12 @@ router = APIRouter(prefix="/services", tags=["Services"])
 # Pydantic schemas
 class ServiceBase(BaseModel):
     name: str
-    description: str = None
+    description: Optional[str] = None
     smart_contract_id: str
     link_cost: float
     callback_wallet_addresses: str
-    input_parameters: dict = Field(default_factory=dict)
-    knowledge_asset: dict = Field(default_factory=dict)
+    input_parameters: Optional[dict] = None
+    knowledge_asset: Optional[dict] = None
 
 class ServiceCreate(ServiceBase):
     pass

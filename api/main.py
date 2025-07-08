@@ -12,14 +12,14 @@ from controllers.sensordata import router as sensordata_router
 from controllers.smartcontract import router as smartcontract_router
 from controllers.predict import router as predict_router
 from controllers.auth import router as auth_router
-from db import SessionLocal, engine, Base
+from db.connection import SessionLocal, engine, Base
 from models.service import Service  # Import Service model to ensure table creation
 from models.sensor import Sensor
 from models.sensordata import SensorData  # Import SensorData model to ensure table creation
 from models.rate import Rate  # Import Rate model to ensure table creation
 from models.predictor import Predictor
 from models.knowledge import Knowledge
-from utils.mock_data import insert_mock_data
+from db.mock_data import insert_mock_data  # Updated import path
 
 app = FastAPI()
 
@@ -33,8 +33,9 @@ if os.path.isdir(vue_dist_path):
     app.mount("/", StaticFiles(directory=vue_dist_path, html=True), name="static")
 
 # Create database tables and insert mock data if needed
-Base.metadata.create_all(bind=engine)
-insert_mock_data()
+# Note: Tables and data are now handled by PostgreSQL init.sql script
+# Base.metadata.create_all(bind=engine)
+# insert_mock_data()
 
 # Allow CORS for local development (adjust origins as needed)
 app.add_middleware(
