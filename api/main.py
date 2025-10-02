@@ -17,8 +17,9 @@ from models.service import Service  # Import Service model to ensure table creat
 from models.sensor import Sensor
 from models.sensordata import SensorData  # Import SensorData model to ensure table creation
 from models.rate import Rate  # Import Rate model to ensure table creation
-from models.predictor import Predictor
+from models.predictor import Predictor, TrainingHistory  # Import updated models
 from models.knowledge import Knowledge
+from services.hvac_optimizer_service import HVACOptimizerService  # Import HVAC service
 from db.mock_data import insert_mock_data  # Updated import path
 
 app = FastAPI()

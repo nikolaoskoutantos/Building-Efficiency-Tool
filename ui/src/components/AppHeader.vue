@@ -1,4 +1,6 @@
+// ...existing code...
 <script setup>
+import Leaderboard from '@/components/Leaderboard.vue'
 import { onMounted, ref } from 'vue'
 import { useColorModes } from '@coreui/vue'
 import { useAuthStore } from '@/stores/auth'
@@ -31,6 +33,12 @@ onMounted(() => {
 })
 
 const { disconnect } = useDisconnect()
+const showLeaderboard = ref(false);
+
+function onShowLeaderboard(event) {
+  if (event && event.preventDefault) event.preventDefault();
+  showLeaderboard.value = true;
+}
 
 async function logout() {
   try {
@@ -88,18 +96,13 @@ function onShowAlerts(event) {
       </CHeaderNav>
       <CHeaderNav class="ms-auto">
         <CNavItem>
-          <CNavLink href="#">
+          <CNavLink href="#" @click="onShowAlerts">
             <CIcon icon="cil-bell" size="lg" />
           </CNavLink>
         </CNavItem>
         <CNavItem>
-          <CNavLink href="#" @click="onShowAlerts">
+          <CNavLink href="#" @click="onShowLeaderboard">
             <CIcon icon="cil-list" size="lg" />
-          </CNavLink>
-        </CNavItem>
-        <CNavItem>
-          <CNavLink href="#">
-            <CIcon icon="cil-envelope-open" size="lg" />
           </CNavLink>
         </CNavItem>
         <CNavItem>
@@ -156,5 +159,6 @@ function onShowAlerts(event) {
       <AppBreadcrumb />
     </CContainer>
   </CHeader>
+  <Leaderboard :visible="showLeaderboard" @close="showLeaderboard = false" myBuilding="Building B" />
   <Alerts :visible="showAlerts" @close="showAlerts = false" />
 </template>

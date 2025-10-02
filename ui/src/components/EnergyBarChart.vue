@@ -14,13 +14,25 @@
 import { ref } from 'vue'
 import { CChartBar } from '@coreui/vue-chartjs'
 
+// Example: Only some days have efficiency achieved (green bar)
+const mainData = Array.from({ length: 30 }, () => Math.floor(Math.random() * 10) + 10)
+// Let's say days 5, 10, 15, 20, 25 have efficiency achieved
+const efficiencyData = Array.from({ length: 30 }, (_, i) => ([4, 9, 14, 19, 24].includes(i) ? Math.floor(mainData[i] * 0.3) : 0))
+
 const barData = ref({
   labels: Array.from({ length: 30 }, (_, i) => `Day ${i + 1}`),
   datasets: [
     {
       label: 'Energy Consumption (kWh)',
       backgroundColor: '#0d6efd',
-      data: Array.from({ length: 30 }, () => Math.floor(Math.random() * 10) + 10),
+      data: mainData,
+      stack: 'main',
+    },
+    {
+      label: 'Efficiency Achieved',
+      backgroundColor: 'green',
+      data: efficiencyData,
+      stack: 'main',
     },
   ],
 })
@@ -41,6 +53,7 @@ const barOptions = ref({
         text: 'kWh',
       },
       beginAtZero: true,
+      stacked: true,
     },
     x: {
       title: {
@@ -50,6 +63,7 @@ const barOptions = ref({
       ticks: {
         maxTicksLimit: 10,
       },
+      stacked: true,
     },
   },
 })

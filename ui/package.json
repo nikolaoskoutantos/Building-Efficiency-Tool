@@ -35,6 +35,7 @@
     "@reown/appkit-adapter-ethers": "^1.7.9",
     "@reown/appkit-adapter-ethers5": "^1.7.9",
     "chart.js": "^4.4.7",
+    "element-plus": "^2.10.4",
     "ethers": "^5.8.0",
     "pinia": "^3.0.1",
     "primeflex": "^4.0.0",

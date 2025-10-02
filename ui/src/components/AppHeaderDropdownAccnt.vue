@@ -50,7 +50,7 @@ async function handleLogout() {
         Account
       </CDropdownHeader>
       <CDropdownItem class="fw-bold" style="font-weight: bold;">
-       ROLE ?? NOT AVAILABLE
+       ROLE: Building Manager
       </CDropdownItem>
       <CDropdownItem @click="showAlerts = true">
         <CIcon icon="cil-bell" /> Alerts

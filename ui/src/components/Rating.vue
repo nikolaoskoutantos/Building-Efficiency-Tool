@@ -9,7 +9,7 @@
         <CCardBody>
           <h5 class="mb-4 text-center">Rate the Weather Forecasts</h5>
           <div v-for="service in services" :key="service.name" class="d-flex align-items-center mb-3">
-            <div class="flex-grow-1 fw-bold">{{ service.name }}</div>
+            <div class="flex-grow-1 fw-bold">{{ service.name === 'Weather Data Service' ? 'Service 1' : service.name === 'Environmental Data' ? 'Service 2' : service.name }}</div>
             <div>
               <span v-for="n in max" :key="n" @click="setServiceRating(service, n)" style="cursor:pointer; font-size:2rem; color: gold;">
                 <span v-if="n <= service.rating">&#9733;</span>
@@ -19,21 +19,8 @@
           </div>
         </CCardBody>
       </CCard>
-      <CCard class="mb-3 mx-auto" style="width: 90%;">
-        <CCardBody>
-          <h5 class="mb-4 text-center">Rate Indoor Temperature</h5>
-          <div class="d-flex justify-content-between align-items-center mb-1">
-            <span style="font-size: 0.95em; color: #0d6efd; font-weight: 500;">I feel cold</span>
-            <span style="font-size: 0.95em; color: #dc3545; font-weight: 500;">I feel hot</span>
-          </div>
-          <input type="range" min="0" max="100" v-model="slider2" class="form-range w-100" />
-          <!-- Comment Text Box -->
-          <div class="mt-3">
-            <label for="rating-comment" class="form-label">Comments</label>
-            <textarea id="rating-comment" v-model="comment" class="form-control" rows="2" placeholder="Add your comments here..."></textarea>
-          </div>
-        </CCardBody>
-      </CCard>
+      <!--
+      -->
       
       <!-- Error Message -->
       <div v-if="submitError" class="alert alert-danger mx-auto" style="width: 90%;">

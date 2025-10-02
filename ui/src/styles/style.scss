@@ -74,6 +74,7 @@ html, body {
   min-height: calc(3rem + 1px); // stylelint-disable-line function-disallowed-list
 }
 
+
 @include color-mode(dark) {
   body {
     background-color: var(--cui-dark-bg-subtle);
@@ -82,4 +83,17 @@ html, body {
   .footer {
     --cui-footer-bg: var(--cui-body-bg);
   }
+  .el-input__wrapper {
+  background-color: #222 !important;
+  color: #fff !important;
 }
+.el-time-panel {
+  background-color: #222 !important;
+  color: #fff !important;
+}
+
+}
+
+
+
+

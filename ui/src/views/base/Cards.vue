@@ -706,7 +706,7 @@ import VueImg from '@/assets/images/vue.jpg'
                   </CCardText>
                 </CCardBody>
               </CCard>
-              <CCard>
+              <!-- <CCard>
                 <CCardImage orientation="top" :src="VueImg" />
                 <CCardBody>
                   <CCardTitle>Card title</CCardTitle>
@@ -720,7 +720,7 @@ import VueImg from '@/assets/images/vue.jpg'
                     >
                   </CCardText>
                 </CCardBody>
-              </CCard>
+              </CCard> -->
               <CCard>
                 <CCardImage orientation="top" :src="VueImg" />
                 <CCardBody>

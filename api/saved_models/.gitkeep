@@ -1,0 +1,2 @@
+# This directory stores trained HVAC optimization models
+# Models are saved as .pkl files with location and timestamp information

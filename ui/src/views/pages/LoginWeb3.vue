@@ -29,7 +29,7 @@
         >
           {{ isSigningMessage ? 'Signing Message...' : 'Connect Wallet' }}
         </CButton>
-        <CButton color="secondary" class="w-100" @click="logout">Logout</CButton>
+        <CButton color="secondary" class="w-100" @click="logout">Register</CButton>
 
         <p class="text-center mt-4 text-muted">
           Don’t have a wallet? <a href="https://metamask.io/" target="_blank">Get MetaMask</a>
@@ -182,7 +182,7 @@ watch(
           }
           
           // Use replace instead of push to avoid back navigation issues
-          await router.replace('/dashboard')
+          await router.replace('/efficiencytool')
         } else if (result.success) {
           console.log('✅ Login successful but no redirect flag')
           
@@ -193,7 +193,7 @@ watch(
           }
           
           // Still redirect if login was successful
-          await router.replace('/dashboard')
+          await router.replace('/efficiencytool')
         } else if (!result.success) {
           throw new Error(result.error || 'Authentication failed')
         }
