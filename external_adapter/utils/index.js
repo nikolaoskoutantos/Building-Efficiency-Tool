@@ -1,5 +1,7 @@
 const { Requester, Validator } = require('@chainlink/external-adapter');
-const { uploadToIPFS } = require('./ipfs.js');   
+const { uploadToIPFS } = require('./ipfs.js');
+const { encryptStreamToIpfs, storeCidMapping, healthCheck, getCidMapping, decryptFromIpfsToStream } = require('./vault');
+const { Readable } = require('stream');
 const { v4: uuidv4 } = require('uuid'); // Import the uuid library
 const fs = require('fs');
 const path = require('path');
@@ -94,9 +96,58 @@ const createRequest = async (input, callback, forecast = false) => {
     });
   }
 
-  // Save the combined response to IPFS
+  // Save the combined response to IPFS with optional encryption
   const filename = `weather_data_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-  const cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
+  
+  let cid;
+  const vaultEnabled = process.env.VAULT_ENABLED === 'true';
+  
+  try {
+    if (vaultEnabled) {
+      // Check Vault connection first
+      const vaultHealthy = await healthCheck();
+      
+      if (vaultHealthy) {
+        console.log('🔐 Using Vault encryption for IPFS upload...');
+        
+        // Convert JSON to readable stream
+        const dataString = JSON.stringify(responses, null, 2);
+        const dataStream = Readable.from([dataString]);
+        
+        // Get IPFS URL from environment
+        const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
+        const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
+        
+        // Encrypt and upload to IPFS
+        const result = await encryptStreamToIpfs(dataStream, ipfsApiUrl, 'weather-data');
+        
+        // Store CID mapping in Vault KV
+        await storeCidMapping(result.cid, {
+          wrapped_dek: result.wrapped_dek,
+          key_version: result.key_version,
+          algorithm: result.alg,
+          chunk_bytes: result.chunk_bytes,
+          nonce_mode: result.nonce_mode,
+          timestamp: Date.now(),
+          filename: filename,
+          job_id: jobRunID,
+          data_type: 'weather_data'
+        });
+        
+        cid = result.cid;
+        console.log(`✅ Encrypted data uploaded to IPFS: ${cid}`);
+      } else {
+        console.warn('⚠️ Vault unhealthy, falling back to plain IPFS upload');
+        cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
+      }
+    } else {
+      console.log('📁 Vault disabled, using plain IPFS upload');
+      cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
+    }
+  } catch (vaultError) {
+    console.error('❌ Vault encryption failed, falling back to plain IPFS:', vaultError.message);
+    cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
+  }
 
   // Return only the CID in the response
   callback(200, {
@@ -124,7 +175,250 @@ const handleForecastRequest = (req, res) => {
   }, true); // Forecast request
 };
 
+// Handle decryption requests
+const handleDecryptRequest = async (req, res) => {
+  console.log('Decrypt Request Data: ', req.body);
+  
+  const { cid } = req.body;
+  const jobRunID = uuidv4();
+  
+  // Validate required parameters
+  if (!cid) {
+    return res.status(400).json({
+      jobRunID,
+      status: 'errored',
+      error: 'Missing required parameter: cid',
+      statusCode: 400,
+    });
+  }
+  
+  const vaultEnabled = process.env.VAULT_ENABLED === 'true';
+  
+  try {
+    if (!vaultEnabled) {
+      return res.status(400).json({
+        jobRunID,
+        status: 'errored',
+        error: 'Vault is disabled. Cannot decrypt data.',
+        statusCode: 400,
+      });
+    }
+    
+    // Check Vault connection
+    const vaultHealthy = await healthCheck();
+    if (!vaultHealthy) {
+      return res.status(503).json({
+        jobRunID,
+        status: 'errored',
+        error: 'Vault is not healthy. Cannot decrypt data.',
+        statusCode: 503,
+      });
+    }
+    
+    console.log(`🔓 Decrypting data for CID: ${cid}`);
+    
+    // Get CID mapping from Vault
+    const metadata = await getCidMapping(cid);
+    if (!metadata) {
+      return res.status(404).json({
+        jobRunID,
+        status: 'errored',
+        error: `No encryption metadata found for CID: ${cid}`,
+        statusCode: 404,
+      });
+    }
+    
+    // Get IPFS URL from environment
+    const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
+    const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
+    
+    // Decrypt data from IPFS
+    const decryptionMeta = {
+      cid,
+      ...metadata
+    };
+    const decryptedStream = await decryptFromIpfsToStream(decryptionMeta, ipfsApiUrl);
+    
+    // Convert stream to string
+    const chunks = [];
+    for await (const chunk of decryptedStream) {
+      chunks.push(chunk);
+    }
+    const decryptedString = Buffer.concat(chunks).toString('utf8');
+    
+    // Parse JSON data
+    const decryptedData = JSON.parse(decryptedString);
+    
+    // Extract the actual weather content from the response array
+    // Filter out QoE data and return only the weather service data
+    const weatherData = decryptedData.filter(item => 
+      item.service && (item.service === 'openweather' || item.service === 'openmeteo')
+    );
+    
+    console.log(`✅ Successfully decrypted data for CID: ${cid}`);
+    
+    res.status(200).json({
+      jobRunID,
+      cid,
+      data: weatherData.length === 1 ? weatherData[0].data : weatherData.map(item => ({ service: item.service, data: item.data })),
+      metadata: {
+        timestamp: metadata.timestamp,
+        filename: metadata.filename,
+        job_id: metadata.job_id,
+        data_type: metadata.data_type,
+        algorithm: metadata.algorithm,
+        services: weatherData.map(item => item.service)
+      },
+      statusCode: 200,
+    });
+    
+  } catch (error) {
+    console.error('❌ Decryption failed:', error.message);
+    res.status(500).json({
+      jobRunID,
+      status: 'errored',
+      error: `Decryption failed: ${error.message}`,
+      statusCode: 500,
+    });
+  }
+};
+
+// Handle health check requests
+const handleHealthRequest = async (req, res) => {
+  const jobRunID = uuidv4();
+  const healthStatus = {
+    timestamp: new Date().toISOString(),
+    services: {}
+  };
+  
+  let overallStatus = 'healthy';
+  let statusCode = 200;
+  
+  try {
+    // Check Vault health
+    const vaultEnabled = process.env.VAULT_ENABLED === 'true';
+    if (vaultEnabled) {
+      try {
+        const vaultHealthy = await healthCheck();
+        healthStatus.services.vault = {
+          status: vaultHealthy ? 'healthy' : 'unhealthy',
+          endpoint: process.env.VAULT_ENDPOINT || 'not configured',
+          enabled: true
+        };
+        if (!vaultHealthy) {
+          overallStatus = 'degraded';
+          statusCode = 503;
+        }
+      } catch (error) {
+        healthStatus.services.vault = {
+          status: 'error',
+          error: error.message,
+          endpoint: process.env.VAULT_ENDPOINT || 'not configured',
+          enabled: true
+        };
+        overallStatus = 'degraded';
+        statusCode = 503;
+      }
+    } else {
+      healthStatus.services.vault = {
+        status: 'disabled',
+        enabled: false
+      };
+    }
+    
+    // Check IPFS health
+    try {
+      const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
+      const testResponse = await fetch(`${ipfsUrl.replace('/api/v0', '')}/api/v0/version`, {
+        method: 'POST',
+        headers: process.env.IPFS_AUTH_TOKEN ? {
+          'Authorization': `Basic ${process.env.IPFS_AUTH_TOKEN}`
+        } : {}
+      });
+      
+      healthStatus.services.ipfs = {
+        status: testResponse.ok ? 'healthy' : 'unhealthy',
+        endpoint: ipfsUrl,
+        version: testResponse.ok ? (await testResponse.json()).Version : 'unknown'
+      };
+      
+      if (!testResponse.ok) {
+        overallStatus = 'degraded';
+        statusCode = 503;
+      }
+    } catch (error) {
+      healthStatus.services.ipfs = {
+        status: 'error',
+        error: error.message,
+        endpoint: process.env.IPFS_URL || 'not configured'
+      };
+      overallStatus = 'degraded';
+      statusCode = 503;
+    }
+    
+    // Check Weather APIs
+    try {
+      // Test OpenWeather API
+      const openWeatherKey = process.env.OPENWEATHER_API_KEY;
+      if (openWeatherKey) {
+        const testWeatherResponse = await fetch(
+          `https://api.openweathermap.org/data/2.5/weather?lat=0&lon=0&appid=${openWeatherKey}`
+        );
+        healthStatus.services.openweather = {
+          status: testWeatherResponse.ok ? 'healthy' : 'unhealthy',
+          api_key_configured: !!openWeatherKey
+        };
+      } else {
+        healthStatus.services.openweather = {
+          status: 'not_configured',
+          api_key_configured: false
+        };
+      }
+      
+      // Test OpenMeteo API (no key required)
+      const testMeteoResponse = await fetch(
+        'https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&current_weather=true'
+      );
+      healthStatus.services.openmeteo = {
+        status: testMeteoResponse.ok ? 'healthy' : 'unhealthy'
+      };
+      
+      if (!testWeatherResponse.ok && !testMeteoResponse.ok) {
+        overallStatus = 'degraded';
+        if (statusCode === 200) statusCode = 503;
+      }
+    } catch (error) {
+      healthStatus.services.weather_apis = {
+        status: 'error',
+        error: error.message
+      };
+      overallStatus = 'degraded';
+      if (statusCode === 200) statusCode = 503;
+    }
+    
+    // Overall health assessment
+    healthStatus.overall_status = overallStatus;
+    healthStatus.jobRunID = jobRunID;
+    
+    console.log(`🎡 Health check completed: ${overallStatus}`);
+    
+    res.status(statusCode).json(healthStatus);
+    
+  } catch (error) {
+    console.error('❌ Health check failed:', error.message);
+    res.status(500).json({
+      jobRunID,
+      overall_status: 'error',
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      statusCode: 500
+    });
+  }
+};
+
 module.exports = {
   handleWeatherRequest,
   handleForecastRequest,
+  handleDecryptRequest,
+  handleHealthRequest,
 };

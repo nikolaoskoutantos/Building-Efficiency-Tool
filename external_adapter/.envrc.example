@@ -1,2 +1,19 @@
-OPENWEATHER_API_KEY=<API_KEY>
-IPFS_URL=<IPFS_URL>
+# Weather API Keys
+OPENWEATHER_API_KEY=<your-openweather-api-key>
+
+# IPFS Configuration  
+IPFS_URL=<your-ipfs-endpoint>
+IPFS_AUTH_TOKEN=<your-ipfs-auth-token>
+
+# External Adapter API Key
+API_KEY=<your-external-adapter-api-key>
+
+# CORS Configuration
+CORS_ORIGIN=<allowed-origins-comma-separated>
+
+# HashiCorp Vault Configuration
+VAULT_ENDPOINT=http://localhost:8200
+VAULT_TOKEN=qoe-dev-token-2025
+VAULT_ENCRYPTION_KEY=weather-data
+VAULT_SECRET_PATH=secret
+VAULT_ENABLED=true

@@ -1,5 +1,8 @@
 const { Requester, Validator } = require('@chainlink/external-adapter');
 const { uploadToIPFS } = require('./ipfs.js');
+const { encryptStreamToIpfs, storeCidMapping, healthCheck } = require('./vault');
+const { Readable } = require('stream');
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 // Define custom parameters for historical requests
@@ -26,7 +29,7 @@ const getDefaultDateRange = () => {
 const createHistoricalRequest = async (input, callback) => {
   // Validate the input
   const validator = new Validator(callback, input, customParams);
-  const jobRunID = validator.validated.id;
+  const jobRunID = validator.validated.id || uuidv4();
 
   // Extract and normalize parameters
   const service = validator.validated.data.service ? validator.validated.data.service.toLowerCase() : 'openmeteo';
@@ -71,17 +74,76 @@ const createHistoricalRequest = async (input, callback) => {
   const config = { url, params };
 
   try {
-    console.log(`Fetching historical data from ${startDate} to ${endDate}...`);
+    console.log(`📊 Fetching historical data from ${startDate} to ${endDate}...`);
     const response = await Requester.request(config);
 
-    // Save the result to IPFS
-    const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    const cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
+    // Check if Vault encryption is enabled
+    const vaultEnabled = process.env.VAULT_ENABLED === 'true';
+    let cid, isEncrypted = false;
+    
+    if (vaultEnabled) {
+      try {
+        // Check Vault health before attempting encryption
+        const vaultHealthy = await healthCheck();
+        
+        if (vaultHealthy) {
+          console.log('🔐 Encrypting historical data with Vault...');
+          
+          // Create filename with timestamp
+          const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          
+          // Create a readable stream from the weather data
+          const weatherDataStream = new Readable({
+            read() {
+              this.push(JSON.stringify(response.data, null, 2));
+              this.push(null); // End of stream
+            }
+          });
+          
+          // Encrypt and upload to IPFS
+          const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
+          const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
+          
+          const encryptionResult = await encryptStreamToIpfs(weatherDataStream, filename, ipfsApiUrl);
+          
+          // Store CID mapping in Vault
+          await storeCidMapping(encryptionResult.cid, {
+            ...encryptionResult.metadata,
+            job_id: jobRunID,
+            data_type: 'historical_weather',
+            service: service,
+            date_range: `${startDate} to ${endDate}`,
+            coordinates: { lat, lon }
+          });
+          
+          cid = encryptionResult.cid;
+          isEncrypted = true;
+          
+          console.log(`✅ Historical data encrypted and stored. CID: ${cid}`);
+        } else {
+          console.log('⚠️ Vault unhealthy, falling back to plain IPFS storage');
+          const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
+        }
+      } catch (vaultError) {
+        console.log(`⚠️ Vault encryption failed: ${vaultError.message}, falling back to plain IPFS`);
+        const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
+      }
+    } else {
+      console.log('📦 Vault disabled, storing in plain IPFS');
+      const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
+    }
 
-    // Return only the CID in the response
+    // Return response with encryption status
     callback(200, {
       jobRunID,
-      cid: cid, // Only the CID
+      cid: cid,
+      encrypted: isEncrypted,
+      service: service,
+      date_range: `${startDate} to ${endDate}`,
+      coordinates: { lat, lon },
       statusCode: 200
     });
   } catch (error) {

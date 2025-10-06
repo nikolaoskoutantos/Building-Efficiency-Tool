@@ -39,7 +39,7 @@ const uploadToIPFS = async (data, filename) => {
     const form = new FormData();
     form.append('file', fs.createReadStream(tmpFile.name), filename);
 
-    const response = await fetch(`${IPFS_URL}/api/v0/add`, {
+    const response = await fetch(`${IPFS_URL}/add?pin=true`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
@@ -58,6 +58,34 @@ const uploadToIPFS = async (data, filename) => {
     const json = await response.json();
     const cid = json.Hash;
     console.log(`✅ Filebase: Uploaded '${filename}' with CID: ${cid}`);
+    
+    // Add to MFS (Mutable File System) so it shows in FILES section
+    try {
+      // First create the directory if it doesn't exist
+      const mkdirResponse = await fetch(`${IPFS_URL}/files/mkdir?arg=/weather_data&parents=true`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
+        },
+      });
+      
+      const mfsPath = `/weather_data/${filename}`;
+      const cpResponse = await fetch(`${IPFS_URL}/files/cp?arg=/ipfs/${cid}&arg=${mfsPath}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
+        },
+      });
+      
+      if (cpResponse.ok) {
+        console.log(`📁 Added to MFS: ${mfsPath}`);
+      } else {
+        console.log(`⚠️ MFS add failed: ${cpResponse.statusText}`);
+      }
+    } catch (mfsError) {
+      console.log(`⚠️ MFS add error: ${mfsError.message}`);
+    }
+    
     return cid;
   } catch (err) {
     console.error('❌ Error uploading to IPFS:', err.message);

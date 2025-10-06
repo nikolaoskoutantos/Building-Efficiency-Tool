@@ -42,7 +42,7 @@ services:
       - vault
   # HashiCorp Vault
   vault:
-    image: vault:latest
+    image: hashicorp/vault:latest
     container_name: qoe-vault
     ports:
       - "8200:8200"
