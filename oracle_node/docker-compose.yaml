@@ -1,14 +1,14 @@
+version: "3.9"
+
 services:
   postgres:
     image: postgres:15
     container_name: chainlink-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,40 +16,38 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    ports:
+      - "5432:5432"
 
   chainlink:
-    image: smartcontract/chainlink:2.17.0
+    image: smartcontract/chainlink:2.28.0
     container_name: chainlink-node
     platform: linux/amd64
     restart: unless-stopped
-    ports:
-      - "6688:6688"
-    volumes:
-      - ./chainlink-data:/chainlink
-      - ./config:/config:ro
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
-      - CHAINLINK_TLS_PORT=0
-      - SECURE_COOKIES=false
-      - ALLOW_ORIGINS=*
-      - ETH_CHAIN_ID=${ETH_CHAIN_ID}
-      - ETH_URL=${ETH_URL}
-    command: >
-      sh -c "
-        if [ ! -f /chainlink/.api ]; then
-          echo '${CHAINLINK_EMAIL}' > /chainlink/.api
-          echo '${CHAINLINK_PASSWORD}' >> /chainlink/.api
-        fi &&
-        if [ ! -f /chainlink/.password ]; then
-          echo '${KEYSTORE_PASSWORD}' > /chainlink/.password
-        fi &&
-        chainlink node start -config /config/config.toml -secrets /config/secrets.toml -a /chainlink/.api -p /chainlink/.password
-      "
+    volumes:
+      - ./chainlink-data:/chainlink
+    command:
+      [
+        "node",
+        "-config", "/chainlink/config.toml",
+        "-secrets", "/chainlink/secrets.toml",
+        "start",
+        "-a", "/chainlink/.api",
+        "-p", "/chainlink/.password"
+      ]
+    ports:
+      - "6688:6688"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    user: "0"
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      # Optional — this ensures Chainlink can connect to DB using env var
+      DATABASE_URL: ${DATABASE_URL}
 
 volumes:
   postgres_data:
