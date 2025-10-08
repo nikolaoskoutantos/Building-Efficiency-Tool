@@ -1,0 +1,43 @@
+services:
+  external-adapter:
+    build: .
+    container_name: weather-external-adapter
+    restart: unless-stopped
+    ports:
+      - "${EA_PORT:-8080}:8080"
+    environment:
+      # API Configuration
+      - API_KEY=${API_KEY}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY}
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      
+      # IPFS Configuration
+      - IPFS_URL=${IPFS_URL}
+      - IPFS_AUTH_TOKEN=${IPFS_AUTH_TOKEN}
+      
+      # Vault Configuration
+      - VAULT_ENDPOINT=${VAULT_ENDPOINT}
+      - VAULT_TOKEN=${VAULT_TOKEN}
+      - VAULT_ENCRYPTION_KEY=${VAULT_ENCRYPTION_KEY:-weather-data}
+      - VAULT_SECRET_PATH=${VAULT_SECRET_PATH:-secret}
+      - VAULT_ENABLED=${VAULT_ENABLED:-true}
+      - VAULT_KV_MOUNT=${VAULT_KV_MOUNT:-secret}
+    
+    # Health check to ensure the service is running
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Network configuration for connecting to other services
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    
+    # Volumes for persistent data (if needed)
+    volumes:
+      - ./logs:/app/logs
+
+volumes:
+  logs:

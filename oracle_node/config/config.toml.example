@@ -1,0 +1,17 @@
+[Log]
+Level = 'warn'
+
+[WebServer]
+AllowOrigins = '*'
+SecureCookies = false
+
+[WebServer.TLS]
+HTTPSPort = 0
+
+[[EVM]]
+ChainID = '84532'
+
+[[EVM.Nodes]]
+Name = 'Sepolia'
+WSURL = 'wss://base-sepolia.blastapi.io/<api_key>'
+HTTPURL = 'https://base-sepolia.blastapi.io/<api_key>'

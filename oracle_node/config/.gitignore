@@ -1,0 +1,13 @@
+# Ignore sensitive files
+*.api
+config.toml
+secrets.toml
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Node and development environment ignores
+node_modules/
+.env
+dist/
