@@ -4,7 +4,7 @@ services:
     container_name: weather-external-adapter
     restart: unless-stopped
     ports:
-      - "${EA_PORT:-8080}:8080"
+      - "${EA_PORT:-3001}:8080"
     environment:
       # API Configuration
       - API_KEY=${API_KEY}
