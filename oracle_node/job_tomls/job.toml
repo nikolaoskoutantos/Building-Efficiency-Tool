@@ -1,0 +1,44 @@
+type = "directrequest"
+schemaVersion = 1
+name = "CID (multiword) 0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF v1"
+externalJobID = "97e7b8cf-a306-46e4-bcdb-bf9a60ae1d74"
+forwardingAllowed = false
+maxTaskDuration = "0s"
+contractAddress = "0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF"
+evmChainID = "84532"
+minIncomingConfirmations = 0
+minContractPaymentLinkJuels = "0"
+observationSource = """
+decode_log   [type="ethabidecodelog"
+              abi="OracleRequest(bytes32 indexed specId, address requester, bytes32 requestId, uint256 payment, address callbackAddr, bytes4 callbackFunctionId, uint256 cancelExpiration, uint256 dataVersion, bytes data)"
+              data="$(jobRun.logData)"
+              topics="$(jobRun.logTopics)"]
+
+decode_cbor  [type="cborparse" data="$(decode_log.data)"]
+
+fetch        [type="http"
+              method="POST"
+              url="https://adapter.nkoutantos.com/"
+              requestData="$(decode_cbor.requestData)"
+              headers="[\\"content-type\\", \\"application/json\\", \\"x-api-key\\", \\"Replace If Authenticated\\"]"]
+
+parse        [type="jsonparse" data="$(fetch)" path="cid"]
+
+encode_data  [type="ethabiencode"
+              abi="(string value)"
+              data="{ \\"value\\": $(parse) }"]
+
+encode_mwr   [type="ethabiencode"
+              abi="(bytes32 requestId, bytes data)"
+              data="{ \\"requestId\\": $(decode_log.requestId), \\"data\\": $(encode_data) }"]
+
+encode_tx    [type="ethabiencode"
+              abi="fulfillOracleRequest2(bytes32 requestId, uint256 payment, address callbackAddress, bytes4 callbackFunctionId, uint256 expiration, bytes data)"
+              data="{ \\"requestId\\": $(decode_log.requestId), \\"payment\\": $(decode_log.payment), \\"callbackAddress\\": $(decode_log.callbackAddr), \\"callbackFunctionId\\": $(decode_log.callbackFunctionId), \\"expiration\\": $(decode_log.cancelExpiration), \\"data\\": $(encode_mwr) }"]
+
+submit_tx    [type="ethtx"
+              to="0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF"
+              data="$(encode_tx)"]
+
+decode_log -> decode_cbor -> fetch -> parse -> encode_data -> encode_mwr -> encode_tx -> submit_tx
+"""

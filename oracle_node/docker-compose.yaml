@@ -18,6 +18,15 @@ services:
       retries: 3
     ports:
       - "5432:5432"  # optional
+    env_file:
+      - .env
+    # logging:
+    #  driver: "loki"
+    #  options:
+    #    loki-url: "${LOKI_URL}"
+    #    loki-basic-auth-username: "${LOKI_USERNAME}"
+    #    loki-basic-auth-password: "${LOKI_PASSWORD}"
+    #    loki-external-labels: "service=postgres"
 
   chainlink:
     image: smartcontract/chainlink:2.28.0
@@ -45,6 +54,15 @@ services:
     user: "0"                          # avoids chmod issues on Windows bind mounts
     security_opt:
       - "no-new-privileges:true"
+    env_file:
+      - .env
+    # logging:
+    #  driver: "loki"
+    #  options:
+    #    loki-url: "${LOKI_URL}"
+    #    loki-basic-auth-username: "${LOKI_USERNAME}"
+    #    loki-basic-auth-password: "${LOKI_PASSWORD}"
+    #    loki-external-labels: "service=chainlink"
 
 volumes:
   postgres_data:

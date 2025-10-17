@@ -1,0 +1,168 @@
+server:
+  http_listen_port: 12345
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: ${LOKI_URL:-http://loki:3100/loki/api/v1/push}
+    # Optional bearer token authentication (preferred over basic auth in many setups)
+    bearer_token: ${LOKI_BEARER:-}
+
+# Highly granular scrape configuration for Docker containers.
+# Goals:
+# - Promote container metadata (compose service/project, image, container id/name)
+# - Parse JSON / logfmt / common text logs and extract HTTP fields (method, path, status)
+# - Combine multiline stacktraces into single entries
+# - Set/normalize severity label (error/warn/info/debug) including 5xx responses
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+
+    # Map docker discovery metadata into labels for easy querying in Loki
+    relabel_configs:
+      # container name (strip leading /)
+      - source_labels: [__meta_docker_container_name]
+        regex: '/?(.*)'
+        target_label: container
+      - source_labels: [__meta_docker_container_image]
+        target_label: image
+      - source_labels: [__meta_docker_container_id]
+        target_label: container_id
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: compose_service
+      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
+        target_label: compose_project
+      # optional labels that you may set in docker-compose files
+      - source_labels: [__meta_docker_container_label_env]
+        target_label: env
+      - source_labels: [__meta_docker_container_label_stack]
+        target_label: stack
+      # Create a stable 'service' label preferring compose service then fallback to container
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service, __meta_docker_container_name]
+        separator: ';'
+        regex: '(.+);(.+)'
+        replacement: '$1'
+        target_label: service
+      # Path to the Docker json log file for this container
+      - source_labels: [__meta_docker_container_id]
+        target_label: __path__
+        replacement: /var/lib/docker/containers/$1/$1-json.log
+
+    pipeline_stages:
+      # 1) multiline: join stack traces and exceptions into single log entry
+      - multiline:
+          firstline: '^(?:\{|\d{4}-\d{2}-\d{2}T|\d{2}:\d{2}:\d{2})'
+          max_wait_time: 2s
+
+      # 2) parse Docker JSON wrapper (time, stream, attrs, log)
+      - docker: {}
+
+      # 3) try to parse the inner application log as JSON (common pattern)
+      - json:
+          expressions:
+            time: time
+            level: level
+            severity: severity
+            msg: msg
+            message: message
+            method: method
+            path: path
+            status: status
+            duration: duration
+            request_id: request_id
+          optional: true
+
+      # 4) logfmt fallback (e.g. level=info msg="..." duration=12ms)
+      - logfmt:
+          mapping:
+            level: level
+            msg: msg
+            request_id: request_id
+            duration: duration
+          optional: true
+
+      # 5) HTTP common log regex fallback (extract method, path, status)
+      - regex:
+          expression: '"(?P<method>GET|POST|PUT|DELETE|PATCH|OPTIONS) (?P<path>[^ ]+) HTTP/[0-9.]+'
+          source: message
+          optional: true
+
+      - regex:
+          expression: '(?P<status>\b[1-5][0-9]{2}\b)'
+          source: message
+          optional: true
+
+      # 6) Promote useful fields to labels for fast filtering in Loki (be selective)
+      - labels:
+          level:
+          severity:
+          compose_service:
+          compose_project:
+          image:
+          container:
+          container_id:
+          service:
+          env:
+          stack:
+          method:
+          path:
+          status:
+          request_id:
+
+      # 7) Normalize severity: anything on stderr becomes error
+      - match:
+          selector: '{stream="stderr"}'
+          stages:
+            - labels:
+                severity: error
+
+      # 8) Normalize by HTTP status: 5xx -> error, 4xx -> warn
+      - match:
+          selector: '{status=~"5.."}'
+          stages:
+            - labels:
+                severity: error
+      - match:
+          selector: '{status=~"4.."}'
+          stages:
+            - labels:
+                severity: warn
+
+      # 9) If level field exists and matches error-like values, mark severity
+      - match:
+          selector: '{level=~"(?i)error|err|fatal|critical"}'
+          stages:
+            - labels:
+                severity: error
+
+      # 10) Attempt to extract level text from message if missing
+      - regex:
+          expression: '(?i)(?:level=|severity=|lvl=|\[)(error|warn|warning|info|debug|trace|fatal)'
+          source: message
+          target: level_extracted
+          optional: true
+      - match:
+          selector: '{level_extracted!=""}'
+          stages:
+            - template:
+                source: level_extracted
+                template: '{{.}}'
+            - labels:
+                level:
+
+    # end of job docker
+
+  # Optional: host-level logs (journald) - uncomment if you want host logs
+  # - job_name: system-journal
+  #   journal:
+  #     max_age: 12h
+  #   pipeline_stages:
+  #     - match:
+  #         selector: '{_SYSTEMD_UNIT=~"docker.*|kube.*"}'
+  #         stages:
+  #           - labels:
+  #               source: system

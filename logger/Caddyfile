@@ -1,0 +1,35 @@
+# Caddyfile for QoE Logging Services
+# Automatic HTTPS with Let's Encrypt
+
+# Grafana Dashboard
+grafana.nkoutantos.com {
+	reverse_proxy grafana:3000
+	
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
+
+# Loki API (for log ingestion)
+logs.nkoutantos.com {
+	reverse_proxy loki:3100
+	
+	# Basic auth for additional security
+	basicauth {
+		admin $2a$12$4vM7zKQoQFJKV.XzCRcNO.FvC/8tQ9aKQUjgYdHjZhGx4zKp3K9TO
+	}
+	
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
