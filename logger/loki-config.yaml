@@ -16,7 +16,6 @@ common:
     kvstore:
       store: inmemory
 
-
 query_range:
   results_cache:
     cache:
@@ -30,6 +29,8 @@ limits_config:
   max_streams_per_user: 10000
   max_query_length: 24h
   max_cache_freshness_per_query: 5m
+  reject_old_samples: true
+  reject_old_samples_max_age: 750h
 
 ingester:
   wal:
@@ -53,6 +54,5 @@ schema_config:
 ruler:
   alertmanager_url: http://localhost:9093
 
-# Disable anonymous usage stats
 analytics:
   reporting_enabled: false

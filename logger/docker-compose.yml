@@ -1,10 +1,12 @@
+# docker-compose.yml — Loki + Grafana + Alloy + Portainer
+
 services:
   loki:
     image: grafana/loki:2.9.0
     container_name: qoe-loki
     command: -config.file=/etc/loki/local-config.yaml
     ports:
-      - "127.0.0.1:3100:3100"          # host-only; Caddy proxies to this
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
@@ -21,13 +23,13 @@ services:
   grafana:
     image: grafana/grafana:10.1.0
     container_name: qoe-grafana
-    env_file: [.env]                 # e.g., GF_SECURITY_ADMIN_USER/PASSWORD, domains, etc.
+    env_file: [.env]
     environment:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
       GF_SERVER_ROOT_URL: "https://${GRAFANA_DOMAIN:-grafana.nkoutantos.com}"
     ports:
-      - "127.0.0.1:4000:3000"        # host-only; Caddy proxies to this
+      - "127.0.0.1:4000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
@@ -46,12 +48,10 @@ services:
   alloy:
     image: grafana/alloy:latest
     container_name: qoe-alloy
-    # Use Promtail-format config with Alloy (no env expansion flags).
     command: ["run", "--config.format=promtail", "--server.http.listen-addr=0.0.0.0:12345", "/etc/alloy/promtail.yaml"]
-    # env_file is fine to keep, but the config below hardcodes the Loki URL (no ${...}).
     env_file: [.env]
     ports:
-      - "127.0.0.1:12345:12345"       # optional Alloy UI/metrics; host-only
+      - "127.0.0.1:12345:12345"
     volumes:
       - ./alloy-config.yaml:/etc/alloy/promtail.yaml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
@@ -68,10 +68,27 @@ services:
       timeout: 10s
       retries: 3
 
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: qoe-portainer
+    ports:
+      - "127.0.0.1:9443:9443"    # HTTPS UI
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    restart: unless-stopped
+    networks: [qoe-logging-network]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider --no-check-certificate https://localhost:9443/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   loki_data:
   grafana_data:
   alloy_tmp:
+  portainer_data:
 
 networks:
   qoe-logging-network:
