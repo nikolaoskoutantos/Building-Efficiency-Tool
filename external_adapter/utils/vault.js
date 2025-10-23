@@ -16,6 +16,7 @@ require('dotenv').config();
 
 const DEFAULT_TRANSIT_KEY = process.env.VAULT_ENCRYPTION_KEY || 'weather-data';
 const DEFAULT_KV_MOUNT = process.env.VAULT_KV_MOUNT || 'kv'; // if you use KV v2
+const DEFAULT_TRANSIT_MOUNT = process.env.VAULT_TRANSIT_MOUNT || 'transit'; // allow non-default transit mount
 const DEFAULT_CHUNK_BYTES = Number(process.env.CHUNK_BYTES) || (4 * 1024 * 1024); // 4MB
 
 class VaultService {
@@ -56,13 +57,13 @@ class VaultService {
   async encryptData(data, keyName = null) {
     const encryptionKey = keyName || DEFAULT_TRANSIT_KEY;
     const plaintext = Buffer.from(JSON.stringify(data)).toString('base64');
-    const res = await this.client.write(`transit/encrypt/${encryptionKey}`, { plaintext });
+    const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/encrypt/${encryptionKey}`, { plaintext });
     return res.data.ciphertext; // "vault:vX:..."
   }
 
   async decryptData(ciphertext, keyName = null) {
     const encryptionKey = keyName || DEFAULT_TRANSIT_KEY;
-    const res = await this.client.write(`transit/decrypt/${encryptionKey}`, { ciphertext });
+    const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/decrypt/${encryptionKey}`, { ciphertext });
     return JSON.parse(Buffer.from(res.data.plaintext, 'base64').toString('utf8'));
   }
 
@@ -71,7 +72,7 @@ class VaultService {
   async getDataKey(keyName = DEFAULT_TRANSIT_KEY) {
     try {
       console.log(`🔑 Requesting DEK from Vault for key: ${keyName}`);
-      const res = await this.client.write(`transit/datakey/plaintext/${keyName}`, {});
+      const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/datakey/plaintext/${keyName}`, {});
       console.log(`✅ DEK generated successfully`);
       return {
         dek: Buffer.from(res.data.plaintext, 'base64'),
@@ -86,19 +87,19 @@ class VaultService {
 
   // 2) Unwrap DEK (to decrypt later)
   async unwrapDek(wrappedDek, keyName = DEFAULT_TRANSIT_KEY) {
-    const res = await this.client.write(`transit/decrypt/${keyName}`, { ciphertext: wrappedDek });
+    const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/decrypt/${keyName}`, { ciphertext: wrappedDek });
     return Buffer.from(res.data.plaintext, 'base64');
   }
 
   // 3) Rewrap wrapped DEK after Transit rotation (no file re-encrypt)
   async rewrapDek(wrappedDek, keyName = DEFAULT_TRANSIT_KEY) {
-    const res = await this.client.write(`transit/rewrap/${keyName}`, { ciphertext: wrappedDek });
+    const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/rewrap/${keyName}`, { ciphertext: wrappedDek });
     return { wrappedDek: res.data.ciphertext, keyVersion: res.data.key_version };
   }
 
   // 4) (Optional) Rotate the Transit key (admin op)
   async rotateTransitKey(keyName = DEFAULT_TRANSIT_KEY) {
-    await this.client.write(`transit/keys/${keyName}/rotate`, {});
+    await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/keys/${keyName}/rotate`, {});
     return true;
   }
 
@@ -209,7 +210,7 @@ class VaultService {
    * Encrypt a Readable stream → upload to IPFS via /api/v0/add
    * Returns: { cid, wrapped_dek, key_version, alg, chunk_bytes, nonce_mode }
    */
-  async encryptStreamToIpfs(plaintextReadable, ipfsApiUrl, keyName = DEFAULT_TRANSIT_KEY, chunkBytes = DEFAULT_CHUNK_BYTES) {
+  async encryptStreamToIpfs(plaintextReadable, ipfsApiUrl, keyName = DEFAULT_TRANSIT_KEY, chunkBytes = DEFAULT_CHUNK_BYTES, mfsDir = 'encrypted_data') {
     // 1) DEK from Vault (disposable)
     const { dek, wrappedDek, keyVersion } = await this.getDataKey(keyName);
 
@@ -245,13 +246,13 @@ class VaultService {
     try {
       // First create the directory if it doesn't exist
       const mkdirUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/mkdir` : `${ipfsApiUrl}/api/v0/files/mkdir`;
-      await axios.post(`${mkdirUrl}?arg=/encrypted_data&parents=true`, {}, {
+      await axios.post(`${mkdirUrl}?arg=/${mfsDir}&parents=true`, {}, {
         headers: {
           'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
         }
       });
       
-      const mfsPath = `/encrypted_data/${cid}.enc`;
+      const mfsPath = `/${mfsDir}/${cid}.enc`;
       const cpUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/cp` : `${ipfsApiUrl}/api/v0/files/cp`;
       await axios.post(`${cpUrl}?arg=/ipfs/${cid}&arg=${mfsPath}`, {}, {
         headers: {

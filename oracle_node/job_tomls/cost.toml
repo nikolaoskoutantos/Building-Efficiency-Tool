@@ -1,0 +1,48 @@
+type = "directrequest"
+schemaVersion = 1
+name = "COSTS (multiword) 0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF v1"
+externalJobID = "11111111-1111-1111-1111-111111111111"
+forwardingAllowed = false
+maxTaskDuration = "0s"
+contractAddress = "0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF"
+evmChainID = "84532"
+minIncomingConfirmations = 0
+minContractPaymentLinkJuels = "0"
+
+observationSource = """
+decode_log   [type="ethabidecodelog"
+              abi="OracleRequest(bytes32 indexed specId, address requester, bytes32 requestId, uint256 payment, address callbackAddr, bytes4 callbackFunctionId, uint256 cancelExpiration, uint256 dataVersion, bytes data)"
+              data="$(jobRun.logData)"
+              topics="$(jobRun.logTopics)"]
+
+decode_cbor  [type="cborparse" data="$(decode_log.data)"]
+
+# POST the same requestData your contract built (it already contains {"id":..., "data":{...}})
+fetch        [type="http"
+              method="POST"
+              url="https://adapter.nkoutantos.com/costs"
+              requestData="$(decode_cbor.requestData)"
+              headers="[\\"content-type\\", \\"application/json\\", \\"x-api-key\\", \\"Replace If Authenticated\\"]"]
+
+# Change path if your /costs response uses another key (e.g., "result" or "totalCostCid")
+parse        [type="jsonparse" data="$(fetch)" path="cid"]
+
+# Multiword response → encode the parsed string into bytes
+encode_data  [type="ethabiencode"
+              abi="(string value)"
+              data="{ \\"value\\": $(parse) }"]
+
+encode_mwr   [type="ethabiencode"
+              abi="(bytes32 requestId, bytes data)"
+              data="{ \\"requestId\\": $(decode_log.requestId), \\"data\\": $(encode_data) }"]
+
+encode_tx    [type="ethabiencode"
+              abi="fulfillOracleRequest2(bytes32 requestId, uint256 payment, address callbackAddress, bytes4 callbackFunctionId, uint256 expiration, bytes data)"
+              data="{ \\"requestId\\": $(decode_log.requestId), \\"payment\\": $(decode_log.payment), \\"callbackAddress\\": $(decode_log.callbackAddr), \\"callbackFunctionId\\": $(decode_log.callbackFunctionId), \\"expiration\\": $(decode_log.cancelExpiration), \\"data\\": $(encode_mwr) }"]
+
+submit_tx    [type="ethtx"
+              to="0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF"
+              data="$(encode_tx)"]
+
+decode_log -> decode_cbor -> fetch -> parse -> encode_data -> encode_mwr -> encode_tx -> submit_tx
+"""

@@ -19,13 +19,13 @@ if (isLocalNode) {
   })();
 }
 
-const uploadToIPFS = async (data, filename) => {
+const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
   try {
     if (isLocalNode && ipfsClientPromise) {
       const ipfs = await ipfsClientPromise;
       const { cid } = await ipfs.add({ path: filename, content: data }, { pin: true });
 
-      const mfsPath = `/weather_data/${filename}`;
+      const mfsPath = `/${mfsDir}/${filename}`;
       await ipfs.files.write(mfsPath, data, { create: true, parents: true, truncate: true });
 
       console.log(`✅ Local IPFS: Stored '${filename}' with CID: ${cid}`);
@@ -62,14 +62,14 @@ const uploadToIPFS = async (data, filename) => {
     // Add to MFS (Mutable File System) so it shows in FILES section
     try {
       // First create the directory if it doesn't exist
-      const mkdirResponse = await fetch(`${IPFS_URL}/files/mkdir?arg=/weather_data&parents=true`, {
+      const mkdirResponse = await fetch(`${IPFS_URL}/files/mkdir?arg=/${mfsDir}&parents=true`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
         },
       });
       
-      const mfsPath = `/weather_data/${filename}`;
+      const mfsPath = `/${mfsDir}/${filename}`;
       const cpResponse = await fetch(`${IPFS_URL}/files/cp?arg=/ipfs/${cid}&arg=${mfsPath}`, {
         method: 'POST',
         headers: {

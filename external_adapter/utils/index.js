@@ -239,16 +239,63 @@ const handleDecryptRequest = async (req, res) => {
     };
     const decryptedStream = await decryptFromIpfsToStream(decryptionMeta, ipfsApiUrl);
     
-    // Convert stream to string
+    // Convert stream to buffer
     const chunks = [];
     for await (const chunk of decryptedStream) {
       chunks.push(chunk);
     }
-    const decryptedString = Buffer.concat(chunks).toString('utf8');
-    
-    // Parse JSON data
-    const decryptedData = JSON.parse(decryptedString);
-    
+    const decryptedBuffer = Buffer.concat(chunks);
+
+    // If this payload is a cost file (binary like Excel), return it raw (base64) + filename
+    if (metadata && metadata.data_type && metadata.data_type === 'costs') {
+      const filename = metadata.filename || 'file';
+      const accept = (req.headers && (req.headers.accept || '')) || '';
+      const wantsDownload = (req.query && (req.query.download === 'true' || req.query.raw === 'true')) || accept.includes('application/octet-stream') || accept.includes('application/vnd.openxmlformats-officedocument');
+
+      if (wantsDownload) {
+        // Determine a sensible content type from filename
+        const ext = path.extname(filename).toLowerCase();
+        let contentType = 'application/octet-stream';
+        if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        else if (ext === '.csv') contentType = 'text/csv';
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/\"/g,'') }"`);
+        // Send raw bytes directly so Postman can save file as binary
+        return res.status(200).send(decryptedBuffer);
+      }
+
+      // Default: return base64 JSON for backward compatibility
+      const b64 = decryptedBuffer.toString('base64');
+      console.log(`✅ Decrypted binary cost file for CID: ${cid}, filename: ${filename}`);
+      return res.status(200).json({
+        jobRunID,
+        cid,
+        data: {
+          filename: filename,
+          content_base64: b64,
+          encoding: 'base64'
+        },
+        metadata: {
+          timestamp: metadata.timestamp,
+          filename: filename,
+          job_id: metadata.job_id,
+          data_type: metadata.data_type,
+          algorithm: metadata.algorithm
+        },
+        statusCode: 200,
+      });
+    }
+
+    // Otherwise assume decrypted content is UTF-8 JSON and parse
+    const decryptedString = decryptedBuffer.toString('utf8');
+    let decryptedData;
+    try {
+      decryptedData = JSON.parse(decryptedString);
+    } catch (e) {
+      throw new Error(`Decrypted payload is not JSON: ${e.message}`);
+    }
+
     // Extract the actual weather content from the response array
     // Filter out QoE data and return only the weather service data
     const weatherData = decryptedData.filter(item => 

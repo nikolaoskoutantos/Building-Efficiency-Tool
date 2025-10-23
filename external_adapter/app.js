@@ -1,372 +1,95 @@
-const { handleWeatherRequest, handleForecastRequest, handleDecryptRequest, handleHealthRequest } = require('./utils/index');
-const {handleHistoricalRequest} = require('./utils/historicalRequest')
 const express = require('express');
 const bodyParser = require('body-parser');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const dotenv = require('dotenv');
+const path = require('path');
 const apiKeyAuth = require('./middleware/apiKeyAuth');
-const app = express();
-const port = process.env.PORT || 8080;
 const cors = require('cors');
-let allowedOrigins = process.env.CORS_ORIGIN || '*';
-if (allowedOrigins !== '*') {
-  allowedOrigins = allowedOrigins.split(',').map(origin => origin.trim());
-}
-app.use(cors({ origin: allowedOrigins }));
 
-// Load environment variables from .env file
+// Load environment variables
 dotenv.config();
+
+// Normalize COST_DATA_SOURCE so common .env formatting mistakes (spaces, surrounding quotes,
+// backslashes) don't break file resolution. We convert backslashes to forward slashes and
+// strip surrounding quotes/whitespace.
+if (process.env.COST_DATA_SOURCE) {
+  try {
+    let s = process.env.COST_DATA_SOURCE;
+    s = s.trim();
+    // remove surrounding single or double quotes
+    s = s.replace(/^['"]+|['"]+$/g, '');
+    // normalize Windows backslashes to forward slashes for consistent resolution
+    s = s.replace(/\\\\/g, '/').replace(/\\/g, '/');
+    process.env.COST_DATA_SOURCE = s;
+    const resolved = path.resolve(process.cwd(), s || '');
+    console.log('COST_DATA_SOURCE (normalized):', process.env.COST_DATA_SOURCE);
+    console.log('COST_DATA_SOURCE resolved path:', resolved);
+  } catch (err) {
+    console.warn('Failed to normalize COST_DATA_SOURCE:', err && err.message ? err.message : err);
+  }
+}
+
+const app = express();
+
+// CORS setup
+let allowedOrigins = process.env.CORS_ORIGIN || '*';
+if (allowedOrigins !== '*') allowedOrigins = allowedOrigins.split(',').map(origin => origin.trim());
+app.use(cors({ origin: allowedOrigins }));
 
 // Middleware
 app.use(bodyParser.json());
 app.use(apiKeyAuth);
 
-// Swagger definition
+// Swagger (minimal setup). Route documentation can be moved into route modules later.
+const port = process.env.PORT || 8080;
 const swaggerDefinition = {
   openapi: '3.0.0',
   info: {
     title: 'Weather External Adapter API',
     version: '1.0.0',
-    description: 'An API to fetch weather information using Chainlink External Adapter with multiple services.',
+    description: 'An API to fetch weather information using Chainlink External Adapter.',
   },
-  servers: [
-    {
-      url: `http://localhost:${port}`, // Replace with your server's base URL
-    },
-  ],
+  servers: [{ url: `http://localhost:${port}` }],
   components: {
     securitySchemes: {
       ApiKeyAuth: {
         type: 'apiKey',
         in: 'header',
         name: 'x-api-key',
-        description: 'Enter your API key',
-      },
-    },
+        description: 'API key required to access protected endpoints. Set your key here.'
+      }
+    }
   },
-  security: [{ ApiKeyAuth: [] }],
+  security: [ { ApiKeyAuth: [] } ],
 };
 
-// Swagger options
 const options = {
   swaggerDefinition,
-  apis: ['./app.js'], // Path to this file for endpoint documentation
+  apis: ['./routes/*.js', './app.js'],
 };
-
-// Generate Swagger docs
 const swaggerSpec = swaggerJsdoc(options);
-
-// Serve Swagger UI
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// Optional: Serve raw Swagger JSON
+// Expose raw swagger JSON
 app.get('/swagger.json', (req, res) => {
   res.json(swaggerSpec);
 });
 
-// Health check endpoint
-/**
- * @swagger
- * /health:
- *   get:
- *     summary: Health check for the server
- *     responses:
- *       200:
- *         description: Server is up and running!
- */
-app.get('/health', (req, res) => {
-  res.status(200).send('Server is up and running!');//Αdd timestamp to the response.
-});
+// Mount route modules
+const weatherRouter = require('./routes/weather');
+const forecastsRouter = require('./routes/forecasts');
+const historicalRouter = require('./routes/historical');
+const decryptRouter = require('./routes/decrypt');
+const healthRouter = require('./routes/health');
+const costsRouter = require('./routes/costs');
 
-// Main POST endpoint for current weather (Fetches from BOTH OpenMeteo & OpenWeather)
-/**
- * @swagger
- * /:
- *   post:
- *     summary: Fetch current weather data
- *     description: Fetch current weather data from OpenWeather and Open-Meteo.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - id
- *               - data
- *             properties:
- *               id:
- *                 type: string
- *                 description: Job Run ID
- *               data:
- *                 type: object
- *                 required:
- *                   - service
- *                   - lat
- *                   - lon
- *                 properties:
- *                   service:
- *                     type: string
- *                     description: The weather service to fetch data from.
- *                     enum: [openweather, openmeteo]
- *                   lat:
- *                     type: number
- *                     description: Latitude of the location.
- *                   lon:
- *                     type: number
- *                     description: Longitude of the location.
- *     responses:
- *       200:
- *         description: Weather data fetched successfully from both OpenWeather and Open-Meteo
- *       400:
- *         description: Bad request due to missing parameters.
- *       500:
- *         description: Error fetching weather data
- */
-app.post('/', handleWeatherRequest);
+app.use('/health', healthRouter);
+app.use('/', weatherRouter);
+app.use('/forecasts', forecastsRouter);
+app.use('/historical', historicalRouter);
+app.use('/decrypt', decryptRouter);
+app.use('/costs', costsRouter);
 
-// New POST endpoint for weather forecasts (ONLY OpenMeteo)
-/**
- * @swagger
- * /forecasts:
- *   post:
- *     summary: Fetch weather forecast data
- *     description: Fetch weather forecast data using Open-Meteo.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - id
- *               - data
- *             properties:
- *               id:
- *                 type: string
- *                 description: Job Run ID
- *               data:
- *                 type: object
- *                 required:
- *                   - service
- *                   - lat
- *                   - lon
- *                 properties:
- *                   service:
- *                     type: string
- *                     description: The weather service to fetch forecast data from.
- *                     enum: [openmeteo]
- *                   lat:
- *                     type: number
- *                     description: Latitude of the location.
- *                   lon:
- *                     type: number
- *                     description: Longitude of the location.
- *     responses:
- *       200:
- *         description: Forecast data fetched successfully
- *       400:
- *         description: Bad request due to missing parameters.
- *       500:
- *         description: Error fetching forecast data
- */
-app.post('/forecasts', handleForecastRequest);
-
-// New POST endpoint for historical weather data (ONLY OpenMeteo)
-/**
- * @swagger
- * /historical:
- *   post:
- *     summary: Fetch historical weather data
- *     description: Fetch historical weather data from OpenMeteo for a given date range.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - id
- *               - data
- *             properties:
- *               id:
- *                 type: string
- *                 description: Job Run ID
- *               data:
- *                 type: object
- *                 required:
- *                   - service
- *                   - lat
- *                   - lon
- *                 properties:
- *                   service:
- *                     type: string
- *                     description: The weather service to fetch historical data from.
- *                     enum: [openmeteo]
- *                   lat:
- *                     type: number
- *                     description: Latitude of the location.
- *                   lon:
- *                     type: number
- *                     description: Longitude of the location.
- *                   start_date:
- *                     type: string
- *                     format: date
- *                     description: Start date for historical data (YYYY-MM-DD). Optional.
- *                   end_date:
- *                     type: string
- *                     format: date
- *                     description: End date for historical data (YYYY-MM-DD). Optional.
- *     responses:
- *       200:
- *         description: Historical weather data fetched successfully
- *       400:
- *         description: Bad request due to missing parameters.
- *       500:
- *         description: Error fetching historical data
- */
-app.post('/historical', handleHistoricalRequest);
-
-/**
- * @swagger
- * /decrypt:
- *   post:
- *     summary: Decrypt data from IPFS using Vault
- *     description: Decrypt encrypted weather data stored in IPFS using HashiCorp Vault envelope encryption.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - cid
- *             properties:
- *               cid:
- *                 type: string
- *                 description: IPFS Content Identifier (CID) of the encrypted data
- *                 example: QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG
- *     responses:
- *       200:
- *         description: Data successfully decrypted
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 jobRunID:
- *                   type: string
- *                   description: Unique job run identifier
- *                 cid:
- *                   type: string
- *                   description: IPFS CID of the encrypted data
- *                 data:
- *                   type: object
- *                   description: Decrypted weather data
- *                 metadata:
- *                   type: object
- *                   properties:
- *                     timestamp:
- *                       type: string
- *                       description: Encryption timestamp
- *                     filename:
- *                       type: string
- *                       description: Original filename
- *                     job_id:
- *                       type: string
- *                       description: Original job ID
- *                     data_type:
- *                       type: string
- *                       description: Type of data (e.g., weather)
- *                     algorithm:
- *                       type: string
- *                       description: Encryption algorithm used
- *                 statusCode:
- *                   type: number
- *                   example: 200
- *       400:
- *         description: Bad request - missing CID or Vault disabled
- *       404:
- *         description: No encryption metadata found for given CID
- *       500:
- *         description: Decryption failed
- *       503:
- *         description: Vault service unhealthy
- */
-app.post('/decrypt', handleDecryptRequest);
-
-/**
- * @swagger
- * /health:
- *   get:
- *     summary: System health check
- *     description: Check the health status of all system components including Vault, IPFS, and weather APIs.
- *     responses:
- *       200:
- *         description: All systems healthy
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 jobRunID:
- *                   type: string
- *                   description: Unique job run identifier
- *                 overall_status:
- *                   type: string
- *                   enum: [healthy, degraded, error]
- *                   description: Overall system health status
- *                 timestamp:
- *                   type: string
- *                   format: date-time
- *                   description: Health check timestamp
- *                 services:
- *                   type: object
- *                   properties:
- *                     vault:
- *                       type: object
- *                       properties:
- *                         status:
- *                           type: string
- *                           enum: [healthy, unhealthy, disabled, error]
- *                         endpoint:
- *                           type: string
- *                         enabled:
- *                           type: boolean
- *                     ipfs:
- *                       type: object
- *                       properties:
- *                         status:
- *                           type: string
- *                           enum: [healthy, unhealthy, error]
- *                         endpoint:
- *                           type: string
- *                         version:
- *                           type: string
- *                     openweather:
- *                       type: object
- *                       properties:
- *                         status:
- *                           type: string
- *                           enum: [healthy, unhealthy, not_configured]
- *                         api_key_configured:
- *                           type: boolean
- *                     openmeteo:
- *                       type: object
- *                       properties:
- *                         status:
- *                           type: string
- *                           enum: [healthy, unhealthy]
- *       503:
- *         description: One or more services degraded
- *       500:
- *         description: Health check failed
- */
-app.get('/health', handleHealthRequest);
-
-// Start the server
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server is listening on port ${port}`);
-  console.log(`Swagger docs available at http://localhost:${port}/api-docs`);
-});
+// Export app for server.js (and tests)
+module.exports = app;
