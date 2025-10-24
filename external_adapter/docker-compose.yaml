@@ -37,6 +37,7 @@ services:
     # Volumes for persistent data (if needed)
     volumes:
       - ./logs:/app/logs
+      - ./data:/home/node/app/data  # Ensure the data directory is mapped correctly
     env_file:
       - .env
     # logging:
