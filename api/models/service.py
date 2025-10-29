@@ -12,3 +12,4 @@ class Service(Base):
     callback_wallet_addresses = Column(String, nullable=False)  # Comma-separated or JSON if you want
     input_parameters = Column(JSON, nullable=True)
     knowledge_asset = Column(JSON, nullable=True)
+    is_active = Column(Integer, nullable=True, default=1)  # 1 for active, 0 for inactive

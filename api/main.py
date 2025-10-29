@@ -13,6 +13,7 @@ from controllers.smartcontract import router as smartcontract_router
 from controllers.predict import router as predict_router
 from controllers.auth import router as auth_router
 from db.connection import SessionLocal, engine, Base
+from models.hvac_models import Building
 from models.service import Service  # Import Service model to ensure table creation
 from models.sensor import Sensor
 from models.sensordata import SensorData  # Import SensorData model to ensure table creation
@@ -33,10 +34,17 @@ vue_dist_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../ui/d
 if os.path.isdir(vue_dist_path):
     app.mount("/", StaticFiles(directory=vue_dist_path, html=True), name="static")
 
-# Create database tables and insert mock data if needed
-# Note: Tables and data are now handled by PostgreSQL init.sql script
-# Base.metadata.create_all(bind=engine)
-# insert_mock_data()
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
+# Insert mock data if DEV mode is enabled
+if os.getenv("DEV", "false").lower() == "true":
+    try:
+        print("[main.py] DEV mode enabled: inserting mock data...")
+        insert_mock_data()
+    except Exception as e:
+        print(f"[main.py] Warning: mock data insertion failed: {e}")
 
 # Allow CORS for local development (adjust origins as needed)
 app.add_middleware(

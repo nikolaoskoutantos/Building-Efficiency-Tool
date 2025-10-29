@@ -1,4 +1,6 @@
-from sqlalchemy import String
+from sqlalchemy import String, Column, Integer, JSON, DateTime, ForeignKey
+from sqlalchemy.sql import func
+from db import Base
 # Building model
 class Building(Base):
     __tablename__ = "buildings"

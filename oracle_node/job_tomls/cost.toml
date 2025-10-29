@@ -1,7 +1,6 @@
 type = "directrequest"
 schemaVersion = 1
 name = "COSTS (multiword) 0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF v1"
-externalJobID = "11111111-1111-1111-1111-111111111111"
 forwardingAllowed = false
 maxTaskDuration = "0s"
 contractAddress = "0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF"
