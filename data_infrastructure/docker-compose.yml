@@ -26,14 +26,7 @@ services:
       - qoe-network
     env_file:
       - .env
-    # logging:
-    #  driver: "loki"
-    #  options:
-    #    loki-url: "${LOKI_URL}"
-    #    loki-basic-auth-username: "${LOKI_USERNAME}"
-    #    loki-basic-auth-password: "${LOKI_PASSWORD}"
-    #    loki-external-labels: "service=ipfs"
-  # Caddy Reverse Proxy
+
   caddy:
     image: caddy:2-alpine
     container_name: qoe-caddy
@@ -75,13 +68,6 @@ services:
       retries: 3
     env_file:
       - .env
-    # logging:
-    #  driver: "loki"
-    #  options:
-    #    loki-url: "${LOKI_URL}"
-    #    loki-basic-auth-username: "${LOKI_USERNAME}"
-    #    loki-basic-auth-password: "${LOKI_PASSWORD}"
-    #    loki-external-labels: "service=vault"
 
 volumes:
   ipfs_data:

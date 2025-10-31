@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build all Docker Compose services (api)
+        run: |
+          cd api
+          docker compose build
+
+      - name: Build all Docker Compose services (ui)
+        run: |
+          cd ui
+          docker compose build
+
+      - name: Build all Docker Compose services (external_adapter)
+        run: |
+          cd external_adapter
+          docker compose build
+
+      - name: Build all Docker Compose services (data_infrastructure)
+        run: |
+          cd data_infrastructure
+          docker compose build
+
+      - name: Build all Docker Compose services (logger)
+        run: |
+          cd logger
+          docker compose build
+
+      - name: Build all Docker Compose services (oracle_node)
+        run: |
+          cd oracle_node
+          docker compose build

@@ -1,6 +1,10 @@
-# QoE Platform Infrastructure
+## Service Overview & Configuration
 
-Minimal Docker setup for IPFS storage, Caddy proxy, and Vault encryption.
+- **IPFS**: Decentralized file storage. Used to store encrypted data and make it accessible via a content identifier (CID). Our app uploads encrypted files here and retrieves them by CID.
+- **Vault**: Secrets management and encryption. Provides the encryption engine for encrypting data before it is uploaded to IPFS, and decrypting it when retrieved.
+- **Caddy**: Web server and reverse proxy. Handles HTTPS, domain routing, and can provide authentication for IPFS and Vault endpoints.
+
+Environment variables for each service are set directly in the `docker-compose.yml` file or in the service configuration files. There are no `.env` files required for this setup.
 
 ## Quick Start
 
@@ -18,7 +22,7 @@ docker-compose up -d
 ## Encrypt-then-Store Workflow
 
 1. **Encrypt data** with Vault Transit engine
-2. **Store encrypted data** in IPFS  
+2. **Store encrypted data** in IPFS
 3. **Retrieve and decrypt** when needed
 
 See `ENCRYPT_IPFS_WORKFLOW.md` for detailed examples.

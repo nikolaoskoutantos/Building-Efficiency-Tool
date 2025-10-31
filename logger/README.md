@@ -1,62 +1,28 @@
-# Centralized Logging with Loki + Grafana
+# Centralized Logging with Alloy, Loki, and Grafana
 
-## Quick Start
+This logging stack uses **Alloy** to collect all logs from the Docker engine and forward them to **Loki** for storage and querying. **Grafana** provides dashboards and log exploration.
 
-1. Copy environment file:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your secure passwords
-   ```
+## How It Works
 
-2. Start logging services:
-   ```bash
-   cd logger
-   docker compose up -d
-   ```
+- **Alloy** acts as the log collector, reading all logs from the Docker engine.
+- Alloy forwards these logs to **Loki**, a log aggregation system.
+- **Grafana** connects to Loki, allowing you to visualize and search logs from all your containers in one place.
 
-3. Access Grafana:
-   - URL: https://grafana.nkoutantos.com
-   - Username: `admin`
-   - Password: `your_secure_grafana_password`
-
-## Configure Other Containers
-
-Add this to each service in your docker-compose files:
-
-```yaml
-services:
-  your-service:
-    # ... existing config ...
-    logging:
-      driver: "loki"
-      options:
-        loki-url: "https://logs.nkoutantos.com/loki/api/v1/push"
-        loki-basic-auth-username: "admin"
-        loki-basic-auth-password: "your_secure_loki_password"
-        loki-external-labels: "service=your-service-name"
-    networks:
-      - qoe-logging-network
-
-networks:
-  qoe-logging-network:
-    external: true
-```
+This setup avoids the need to configure logging drivers in each container—Alloy captures everything at the Docker engine level.
 
 ## Services
 
-- **Loki** (Port 3100): Secure log storage with authentication
-- **Grafana** (Port 3000): Log dashboard with SSL
-- **Caddy**: Reverse proxy with automatic HTTPS
-- **Promtail**: Log collector
+- **Alloy**: Collects all Docker logs and forwards to Loki
+- **Loki**: Stores and indexes logs
+- **Grafana**: Dashboards and log search
 
-## Domains
+## .env Configuration
 
-- **Grafana**: https://grafana.nkoutantos.com
-- **Loki API**: https://logs.nkoutantos.com
+The `.env` file is used to securely configure credentials and environment variables for the logging stack. For a stable and secure setup, you should:
 
-## Security Features
+- Copy `.env.example` to `.env` and fill in all required values.
+- Set strong, unique passwords for Grafana and Loki.
+- Configure domain names to match your deployment (e.g., for HTTPS certificates).
+- Review and adjust any other environment variables for your infrastructure (such as email for Let's Encrypt notifications).
 
-- HTTPS with automatic Let's Encrypt certificates
-- Basic authentication for Loki API
-- Secure password configuration
-- Security headers enabled
+Keeping your `.env` file up to date and secure ensures reliable authentication, encrypted connections, and smooth operation of all logging services.
