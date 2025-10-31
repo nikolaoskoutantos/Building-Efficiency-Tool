@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db import SessionLocal
@@ -5,6 +6,9 @@ from models.service import Service
 from controllers.auth import get_current_user
 from typing import List, Optional
 from pydantic import BaseModel, Field
+
+# Error message constants
+SERVICE_NOT_FOUND_MSG = "Service not found"
 
 router = APIRouter(prefix="/services", tags=["Services"])
 
@@ -49,14 +53,14 @@ def read_services(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
 def read_service(service_id: int, db: Session = Depends(get_db)):
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
-        raise HTTPException(status_code=404, detail="Service not found")
+        raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
     return service
 
 @router.put("/{service_id}", response_model=ServiceRead)
 def update_service(service_id: int, service: ServiceCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
-        raise HTTPException(status_code=404, detail="Service not found")
+        raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
     for key, value in service.dict().items():
         setattr(db_service, key, value)
     db.commit()
@@ -67,7 +71,7 @@ def update_service(service_id: int, service: ServiceCreate, db: Session = Depend
 def delete_service(service_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
-        raise HTTPException(status_code=404, detail="Service not found")
+        raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
     db.delete(db_service)
     db.commit()
     return {"detail": "Service deleted"}

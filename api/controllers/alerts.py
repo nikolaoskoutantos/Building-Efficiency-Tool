@@ -1,3 +1,4 @@
+ALERT_NOT_FOUND = "Alert not found"
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from ..db import db
@@ -33,14 +34,14 @@ def read_alerts(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 def read_alert(alert_id: int, db: Session = Depends(get_db)):
     alert = db.query(alerts_model.Alert).filter(alerts_model.Alert.id == alert_id).first()
     if not alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
+        raise HTTPException(status_code=404, detail=ALERT_NOT_FOUND)
     return alert
 
 @router.put("/{alert_id}", response_model=alerts_schema.Alert)
 def update_alert(alert_id: int, alert: alerts_schema.AlertUpdate, db: Session = Depends(get_db)):
     db_alert = db.query(alerts_model.Alert).filter(alerts_model.Alert.id == alert_id).first()
     if not db_alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
+        raise HTTPException(status_code=404, detail=ALERT_NOT_FOUND)
     for key, value in alert.dict(exclude_unset=True).items():
         setattr(db_alert, key, value)
     db.commit()
@@ -51,7 +52,7 @@ def update_alert(alert_id: int, alert: alerts_schema.AlertUpdate, db: Session = 
 def delete_alert(alert_id: int, db: Session = Depends(get_db)):
     db_alert = db.query(alerts_model.Alert).filter(alerts_model.Alert.id == alert_id).first()
     if not db_alert:
-        raise HTTPException(status_code=404, detail="Alert not found")
+        raise HTTPException(status_code=404, detail=ALERT_NOT_FOUND)
     db.delete(db_alert)
     db.commit()
     return {"ok": True}

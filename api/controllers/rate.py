@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from db import get_db
@@ -8,6 +9,9 @@ from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 import os
+
+# Error message constants
+RATE_NOT_FOUND_MSG = "Rate not found"
 
 router = APIRouter(prefix="/rates", tags=["Rates"])
 
@@ -217,14 +221,14 @@ def read_rates(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 def read_rate(rate_id: int, db: Session = Depends(get_db)):
     rate = db.query(Rate).filter(Rate.id == rate_id).first()
     if not rate:
-        raise HTTPException(status_code=404, detail="Rate not found")
+        raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
     return rate
 
 @router.put("/{rate_id}", response_model=RateRead)
 def update_rate(rate_id: int, rate: RateCreate, db: Session = Depends(get_db)):
     db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
     if not db_rate:
-        raise HTTPException(status_code=404, detail="Rate not found")
+        raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
     for key, value in rate.dict().items():
         setattr(db_rate, key, value)
     db.commit()
@@ -235,7 +239,7 @@ def update_rate(rate_id: int, rate: RateCreate, db: Session = Depends(get_db)):
 def delete_rate(rate_id: int, db: Session = Depends(get_db)):
     db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
     if not db_rate:
-        raise HTTPException(status_code=404, detail="Rate not found")
+        raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
     db.delete(db_rate)
     db.commit()
     return {"detail": "Rate deleted"}

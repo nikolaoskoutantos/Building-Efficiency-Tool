@@ -1,3 +1,5 @@
+SCHEDULE_NOT_FOUND = "Schedule not found"
+SCHEDULE_DELETED = "Schedule deleted"
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -51,14 +53,14 @@ def create_schedule(schedule: ScheduleCreate, db: Session = Depends(get_db)):
 def get_schedule(schedule_id: int, db: Session = Depends(get_db)):
     schedule = db.query(HVACSchedule).filter(HVACSchedule.id == schedule_id).first()
     if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
+        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
     return schedule
 
 @router.put("/{schedule_id}", response_model=ScheduleRead)
 def update_schedule(schedule_id: int, schedule: ScheduleCreate, db: Session = Depends(get_db)):
     db_schedule = db.query(HVACSchedule).filter(HVACSchedule.id == schedule_id).first()
     if not db_schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
+        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
     db_schedule.hvac_id = schedule.hvac_id
     db_schedule.periods = [p.dict() for p in schedule.periods]
     db.commit()
@@ -69,7 +71,7 @@ def update_schedule(schedule_id: int, schedule: ScheduleCreate, db: Session = De
 def delete_schedule(schedule_id: int, db: Session = Depends(get_db)):
     db_schedule = db.query(HVACSchedule).filter(HVACSchedule.id == schedule_id).first()
     if not db_schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
+        raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
     db.delete(db_schedule)
     db.commit()
-    return {"detail": "Schedule deleted"}
+    return {"detail": SCHEDULE_DELETED}

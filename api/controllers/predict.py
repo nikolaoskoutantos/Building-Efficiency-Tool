@@ -46,6 +46,14 @@ class HVACPredictionRequest(BaseModel):
     setpoint: float
     duration: int = 12  # Number of 5-minute intervals
 
+def clamp_duration(duration: int, min_val: int = 1, max_val: int = 288) -> int:
+    """Clamp duration to a safe range (default: 1 to 288 for 5-min intervals in a day)."""
+    if duration < min_val:
+        return min_val
+    if duration > max_val:
+        return max_val
+    return duration
+
 class HVACOptimizationRequest(BaseModel):
     latitude: float
     longitude: float
@@ -116,14 +124,14 @@ async def predict_hvac(request: HVACPredictionRequest):
     """Predict temperature and energy consumption for HVAC operation schedule."""
     try:
         hvac_optimizer = HVACOptimizerService(request.latitude, request.longitude)
-        
+        safe_duration = clamp_duration(request.duration)
         total_consumption, temperatures = hvac_optimizer.predict_one_hour(
             operation=request.operation,
             starting_temp=request.starting_temperature,
             starting_time=request.starting_time,
             outdoor_temps=request.outdoor_temperatures,
             setpoint=request.setpoint,
-            duration=request.duration
+            duration=safe_duration
         )
         
         return {
@@ -143,14 +151,14 @@ async def optimize_hvac_schedule(request: HVACOptimizationRequest):
     """Optimize HVAC operation schedule for energy efficiency."""
     try:
         hvac_optimizer = HVACOptimizerService(request.latitude, request.longitude)
-        
+        safe_duration = clamp_duration(request.duration)
         if request.optimization_type == "peak":
             result = hvac_optimizer.biased_random_search(
                 starting_temp=request.starting_temperature,
                 starting_time=request.starting_time,
                 outdoor_temps=request.outdoor_temperatures,
                 setpoint=request.setpoint,
-                duration=request.duration
+                duration=safe_duration
             )
         else:  # normal conditions
             result = hvac_optimizer.normal_conditions_optimizer(
@@ -158,7 +166,7 @@ async def optimize_hvac_schedule(request: HVACOptimizationRequest):
                 starting_time=request.starting_time,
                 outdoor_temps=request.outdoor_temperatures,
                 setpoint=request.setpoint,
-                duration=request.duration
+                duration=safe_duration
             )
         
         return {
@@ -223,14 +231,14 @@ async def evaluate_hvac_schedule(request: HVACPredictionRequest):
     """Evaluate a specific HVAC operation schedule with detailed metrics."""
     try:
         hvac_optimizer = HVACOptimizerService(request.latitude, request.longitude)
-        
+        safe_duration = clamp_duration(request.duration)
         result = hvac_optimizer.evaluate_schedule(
             operation=request.operation,
             starting_temp=request.starting_temperature,
             starting_time=request.starting_time,
             outdoor_temps=request.outdoor_temperatures,
             setpoint=request.setpoint,
-            duration=request.duration
+            duration=safe_duration
         )
         
         return {

@@ -81,7 +81,9 @@ class HVACOptimizer:
                 if 'rf_model_path' in model_data:
                     try:
                         self.rf_model = joblib.load(model_data['rf_model_path'])
-                    except:
+                    except (SystemExit, KeyboardInterrupt):
+                        raise
+                    except Exception:
                         self.rf_model = None
                 
                 print(f"Loaded HVAC model for location ({self.latitude}, {self.longitude})")
@@ -90,6 +92,8 @@ class HVACOptimizer:
             print(f"No existing model found for location ({self.latitude}, {self.longitude})")
             return False
             
+        except (SystemExit, KeyboardInterrupt):
+            raise
         except Exception as e:
             print(f"Error loading model: {e}")
             return False

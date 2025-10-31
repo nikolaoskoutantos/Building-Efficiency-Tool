@@ -1,9 +1,13 @@
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.sensor import Sensor
 from typing import List
 from pydantic import BaseModel
+
+# Error message constants
+SENSOR_NOT_FOUND_MSG = "Sensor not found"
 
 router = APIRouter(prefix="/sensors", tags=["Sensors"])
 
@@ -46,14 +50,14 @@ def read_sensors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db))
 def read_sensor(sensor_id: int, db: Session = Depends(get_db)):
     sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
     if not sensor:
-        raise HTTPException(status_code=404, detail="Sensor not found")
+        raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
     return sensor
 
 @router.put("/{sensor_id}", response_model=SensorRead)
 def update_sensor(sensor_id: int, sensor: SensorCreate, db: Session = Depends(get_db)):
     db_sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
     if not db_sensor:
-        raise HTTPException(status_code=404, detail="Sensor not found")
+        raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
     for key, value in sensor.dict().items():
         setattr(db_sensor, key, value)
     db.commit()
@@ -64,7 +68,7 @@ def update_sensor(sensor_id: int, sensor: SensorCreate, db: Session = Depends(ge
 def delete_sensor(sensor_id: int, db: Session = Depends(get_db)):
     db_sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
     if not db_sensor:
-        raise HTTPException(status_code=404, detail="Sensor not found")
+        raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
     db.delete(db_sensor)
     db.commit()
     return {"detail": "Sensor deleted"}

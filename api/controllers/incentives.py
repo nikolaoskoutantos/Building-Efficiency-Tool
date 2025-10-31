@@ -1,3 +1,4 @@
+INCENTIVE_NOT_FOUND = "Incentive not found"
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from ..db import db
@@ -33,14 +34,14 @@ def read_incentives(skip: int = 0, limit: int = 100, db: Session = Depends(get_d
 def read_incentive(incentive_id: int, db: Session = Depends(get_db)):
     incentive = db.query(incentives_model.Incentive).filter(incentives_model.Incentive.id == incentive_id).first()
     if not incentive:
-        raise HTTPException(status_code=404, detail="Incentive not found")
+        raise HTTPException(status_code=404, detail=INCENTIVE_NOT_FOUND)
     return incentive
 
 @router.put("/{incentive_id}", response_model=incentives_schema.Incentive)
 def update_incentive(incentive_id: int, incentive: incentives_schema.IncentiveUpdate, db: Session = Depends(get_db)):
     db_incentive = db.query(incentives_model.Incentive).filter(incentives_model.Incentive.id == incentive_id).first()
     if not db_incentive:
-        raise HTTPException(status_code=404, detail="Incentive not found")
+        raise HTTPException(status_code=404, detail=INCENTIVE_NOT_FOUND)
     for key, value in incentive.dict(exclude_unset=True).items():
         setattr(db_incentive, key, value)
     db.commit()
@@ -51,7 +52,7 @@ def update_incentive(incentive_id: int, incentive: incentives_schema.IncentiveUp
 def delete_incentive(incentive_id: int, db: Session = Depends(get_db)):
     db_incentive = db.query(incentives_model.Incentive).filter(incentives_model.Incentive.id == incentive_id).first()
     if not db_incentive:
-        raise HTTPException(status_code=404, detail="Incentive not found")
+        raise HTTPException(status_code=404, detail=INCENTIVE_NOT_FOUND)
     db.delete(db_incentive)
     db.commit()
     return {"ok": True}

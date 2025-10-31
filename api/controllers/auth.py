@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import os
 import requests
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from eth_account.messages import encode_defunct
 from eth_account import Account
 import hashlib
@@ -121,7 +121,7 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
             "role": role,
             "wallet": wallet,
             "auth_method": auth_method,
-            "verified_at": datetime.utcnow().isoformat()
+            "verified_at": datetime.now(timezone.utc).isoformat()
         })
 
     # Create JWT token (stateless auth) if AUTH_TYPE is jwt
@@ -133,7 +133,7 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
             "role": role,
             "wallet": wallet,
             "auth_method": auth_method,
-            "exp": datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
         }
         token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
         print(f"✅ JWT token created: {token[:20]}...")
