@@ -10,7 +10,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Test the function
-SELECT encrypt_wallet('test_wallet', 'test_key') as test1;
-SELECT encrypt_wallet('test_wallet', 'test_key') as test2;
-SELECT encrypt_wallet('test_wallet', 'test_key') as test3;
+
+-- Test the function with deduplicated literals
+WITH test_values AS (
+    SELECT 'test_wallet' AS wallet, 'test_key' AS key
+)
+SELECT encrypt_wallet(wallet, key) as test1 FROM test_values;
+SELECT encrypt_wallet(wallet, key) as test2 FROM test_values;
+SELECT encrypt_wallet(wallet, key) as test3 FROM test_values;

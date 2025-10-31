@@ -3,6 +3,7 @@ Mock data initialization for PostgreSQL database.
 Updated to work with the new db structure and PostgreSQL.
 """
 
+
 import os
 import psycopg2
 from sqlalchemy.orm import Session
@@ -11,13 +12,19 @@ from models.knowledge import Knowledge
 from models.predictor import Predictor
 from models.service import Service
 from models.rate import Rate
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
 
 def get_db_url():
-    """Get the database URL from environment or use default."""
-    return os.getenv(
-        "DATABASE_URL", 
-        "postgresql://qoe_user:qoe_password@localhost:5432/qoe_database"
-    )
+    """Get the database URL from environment or raise if not set."""
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is not set. Please define it in your .env file as DATABASE_URL=postgresql://user:password@host:port/dbname"
+        )
+    return db_url
 
 def insert_mock_data():
     """

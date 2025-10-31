@@ -1,3 +1,11 @@
+# --- Deduplicated Error Messages ---
+ERR_NO_HVAC_OFF = "No HVAC OFF data found for training"
+ERR_NO_HVAC_ON = "No HVAC ON data found for training"
+ERR_MODEL_NOT_TRAINED = "Model not trained. Please train the model first."
+# --- Deduplicated Error Messages ---
+ERR_NO_HVAC_OFF = "No HVAC OFF data found for training"
+ERR_NO_HVAC_ON = "No HVAC ON data found for training"
+
 import pandas as pd
 import numpy as np
 from sklearn import linear_model, metrics
@@ -17,7 +25,52 @@ from models.predictor import Predictor, TrainingHistory
 from models.sensordata import HVACSensorData
 from db import SessionLocal
 
+# --- Deduplicated String Literals ---
+MODEL_TYPE = "hvac_optimizer"
+TRAINING_STATUS_STARTED = "started"
+TRAINING_STATUS_COMPLETED = "completed"
+TRAINING_STATUS_FAILED = "failed"
+FRAMEWORK = "scikit-learn"
+LINEAR_REGRESSION = "linear_regression"
+RANDOM_FOREST = "random_forest"
+ENERGY_CONSUMPTION = "energy_consumption"
+DELTA_T = "delta_t"
+LOCATION = "location"
+RECOMMENDED_OPERATION = "recommended_operation"
+SAVINGS_PERCENTAGE = "savings_percentage"
+AVG_DEVIATION_FROM_SETPOINT = "avg_deviation_from_setpoint"
+ALL_OFF = "all_off"
+NORMAL = "normal"
+PEAK = "peak"
+OPERATION = "operation"
+TOTAL_SCORE = "total_score"
+COMFORT_PENALTY = "comfort_penalty"
+SWITCH_PENALTY = "switch_penalty"
+TEMPERATURES = "temperatures"
+MODELS = "models"
+TRAINING_HISTORY = "training_history"
+PREDICTOR = "predictor"
+KNOWLEDGE = "knowledge"
+SENSOR = "sensor"
+
 class HVACOptimizerService:
+    def _generate_operation(self, duration: int, switches, starting_operation: int) -> List[int]:
+        """Generate an operation schedule based on switches and starting operation."""
+        operation = [starting_operation]
+        current = starting_operation
+        for i in range(duration):
+            if i in switches:
+                current ^= 1
+            operation.append(current)
+        return operation
+
+    def _evaluate_candidate(self, operation, starting_temp, starting_time, outdoor_temps, setpoint, duration):
+        result = self.evaluate_schedule(
+            operation, starting_temp, starting_time, outdoor_temps, setpoint, duration
+        )
+        result['operation'] = operation
+        return result
+
     """
     HVAC Energy Optimization service with location-based model management.
     
@@ -61,7 +114,7 @@ class HVACOptimizerService:
         try:
             # Find model within location tolerance
             model = db.query(Predictor).filter(
-                Predictor.model_type == 'hvac_optimizer',
+                Predictor.model_type == MODEL_TYPE,
                 Predictor.latitude.between(
                     self.latitude - self.location_tolerance,
                     self.latitude + self.location_tolerance
@@ -84,6 +137,7 @@ class HVACOptimizerService:
                         self.rf_model = joblib.load(model_data['rf_model_path'])
                     except:
                         self.rf_model = None
+                        raise
                 
                 print(f"Loaded HVAC model for location ({self.latitude}, {self.longitude})")
                 return True
@@ -117,7 +171,7 @@ class HVACOptimizerService:
             training_record = TrainingHistory(
                 latitude=self.latitude,
                 longitude=self.longitude,
-                training_status='started',
+                training_status=TRAINING_STATUS_STARTED,
                 training_started_at=datetime.now()
             )
             db.add(training_record)
@@ -152,8 +206,8 @@ class HVACOptimizerService:
             # Store model in database
             predictor = Predictor(
                 name=f"HVAC_Optimizer_lat_{self.latitude}_lon_{self.longitude}",
-                framework="scikit-learn",
-                model_type="hvac_optimizer",
+                framework=FRAMEWORK,
+                model_type=MODEL_TYPE,
                 latitude=self.latitude,
                 longitude=self.longitude,
                 knowledge_id=knowledge_id,
@@ -162,12 +216,12 @@ class HVACOptimizerService:
                     'a_coefficient': float(a_coeff),
                     'avg_consumption_off': float(avg_cons_off),
                     'rf_model_path': model_path,
-                    'linear_regression_metrics': lr_metrics,
-                    'random_forest_metrics': rf_metrics
+                    LINEAR_REGRESSION + '_metrics': lr_metrics,
+                    RANDOM_FOREST + '_metrics': rf_metrics
                 },
                 scores={
-                    'linear_regression': lr_metrics,
-                    'random_forest': rf_metrics
+                    LINEAR_REGRESSION: lr_metrics,
+                    RANDOM_FOREST: rf_metrics
                 }
             )
             
@@ -176,7 +230,7 @@ class HVACOptimizerService:
             
             # Update training history
             training_record.predictor_id = predictor.id
-            training_record.training_status = 'completed'
+            training_record.training_status = TRAINING_STATUS_COMPLETED
             training_record.training_completed_at = datetime.now()
             training_record.training_metrics = {
                 'linear_regression': lr_metrics,
@@ -208,7 +262,7 @@ class HVACOptimizerService:
         except Exception as e:
             print(f"Training failed: {e}")
             if training_record:
-                training_record.training_status = 'failed'
+                training_record.training_status = TRAINING_STATUS_FAILED
                 training_record.notes = str(e)
                 db.commit()
             raise e
@@ -273,9 +327,9 @@ class HVACOptimizerService:
             hvac_on_data = df[df['hvac_operation'] == 1].copy()
             
             if len(hvac_off_data) == 0:
-                raise ValueError("No HVAC OFF data found for training")
+                raise ValueError(ERR_NO_HVAC_OFF)
             if len(hvac_on_data) == 0:
-                raise ValueError("No HVAC ON data found for training")
+                raise ValueError(ERR_NO_HVAC_ON)
             
             # Process HVAC OFF data
             hvac_off_data['prev_indoor_temp'] = hvac_off_data['indoor_temp'].shift(1)
@@ -435,19 +489,25 @@ class HVACOptimizerService:
         feature_cols = ['prev_indoor_temp', 'outdoor_temp', 'stp', 'hour', 'minute', 'dayofweek', 'month']
         x_features = x_on[feature_cols]
         y_targets = y_on[['energy_consumption', 'DT']]
-        
+
         # Split data
         x_train, x_test, y_train, y_test = train_test_split(
             x_features, y_targets, train_size=0.8, test_size=0.2, random_state=0
         )
-        
-        # Train Random Forest
-        rf_model = RandomForestRegressor(n_estimators=100, max_depth=25, random_state=0)
+
+        # Explicitly set all relevant hyperparameters for reproducibility and SonarQube compliance
+        rf_model = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=25,
+            min_samples_leaf=1,
+            max_features='auto',
+            random_state=0
+        )
         rf_model.fit(x_train, y_train)
-        
+
         # Evaluate model
         y_pred = rf_model.predict(x_test)
-        
+
         # Calculate metrics for energy consumption
         energy_metrics = {
             'r2_score': float(metrics.r2_score(y_test['energy_consumption'], y_pred[:, 0])),
@@ -455,7 +515,7 @@ class HVACOptimizerService:
             'mae': float(metrics.mean_absolute_error(y_test['energy_consumption'], y_pred[:, 0])),
             'mape': float(metrics.mean_absolute_percentage_error(y_test['energy_consumption'], y_pred[:, 0]))
         }
-        
+
         # Calculate metrics for Delta T
         dt_metrics = {
             'r2_score': float(metrics.r2_score(y_test['DT'], y_pred[:, 1])),
@@ -463,13 +523,13 @@ class HVACOptimizerService:
             'mae': float(metrics.mean_absolute_error(y_test['DT'], y_pred[:, 1])),
             'mape': float(metrics.mean_absolute_percentage_error(y_test['DT'], y_pred[:, 1]))
         }
-        
+
         metrics_dict = {
             'energy_consumption': energy_metrics,
             'delta_t': dt_metrics,
             'feature_importance': dict(zip(feature_cols, rf_model.feature_importances_.tolist()))
         }
-        
+
         return rf_model, metrics_dict
     
     def _calculate_data_hash(self, csv_path: str) -> str:
@@ -495,7 +555,7 @@ class HVACOptimizerService:
             Tuple of (total_energy_consumption, temperature_predictions)
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(ERR_MODEL_NOT_TRAINED)
         
         temp = [starting_temp]
         start = datetime.strptime(starting_time, '%d/%m/%Y %H:%M')
@@ -545,7 +605,7 @@ class HVACOptimizerService:
             Dict containing energy consumption, comfort penalty, switch penalty, temperatures, and total score
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(ERR_MODEL_NOT_TRAINED)
         
         comfort_penalty_weight = 50
         switch_penalty_weight = 10
@@ -582,32 +642,20 @@ class HVACOptimizerService:
             Dict containing best operation schedule and its evaluation
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
-        
+            raise ValueError(ERR_MODEL_NOT_TRAINED)
+
         best_score = float('inf')
         best_result = None
-        
+
         for num_switches in [1, 2]:
             for switches in combinations(range(duration), num_switches):
                 for starting_operation in [0, 1]:
-                    operation = []
-                    current = starting_operation
-                    operation.append(current)
-                    
-                    for i in range(duration):
-                        if i in switches:
-                            current ^= 1
-                        operation.append(current)
-                    
-                    result = self.evaluate_schedule(
-                        operation, starting_temp, starting_time, outdoor_temps, setpoint, duration
-                    )
-                    result['operation'] = operation
-                    
+                    operation = self._generate_operation(duration, switches, starting_operation)
+                    result = self._evaluate_candidate(operation, starting_temp, starting_time, outdoor_temps, setpoint, duration)
                     if result['total_score'] < best_score:
                         best_score = result['total_score']
                         best_result = result
-        
+
         return best_result
     
     def normal_conditions_optimizer(self, starting_temp: float, starting_time: str, 
@@ -620,7 +668,7 @@ class HVACOptimizerService:
             Dict containing recommended operation and savings analysis
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(ERR_MODEL_NOT_TRAINED)
         
         # Test all OFF operation
         operation_off = [0] * duration
