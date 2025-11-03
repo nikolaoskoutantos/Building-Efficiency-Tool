@@ -30,6 +30,13 @@ class HVACOptimizer:
     # Constants
     MODEL_NOT_TRAINED_ERROR = "Model not trained. Please train the model first."
     
+    # String constants for database and model operations
+    MODEL_TYPE_HVAC_OPTIMIZER = "hvac_optimizer"
+    FRAMEWORK_SCIKIT_LEARN = "scikit-learn"
+    ENERGY_CONSUMPTION_KEY = "energy_consumption"
+    TOTAL_ENERGY_CONSUMPTION_KEY = "total_energy_consumption"
+    AVG_DEVIATION_FROM_SETPOINT_KEY = "avg_deviation_from_setpoint"
+    
     def __init__(self, latitude: float, longitude: float, location_tolerance: float = 0.01):
         """
         Initialize HVAC Optimizer for a specific location.
@@ -63,7 +70,7 @@ class HVACOptimizer:
         try:
             # Find model within location tolerance
             model = db.query(Predictor).filter(
-                Predictor.model_type == 'hvac_optimizer',
+                Predictor.model_type == self.MODEL_TYPE_HVAC_OPTIMIZER,
                 Predictor.latitude.between(
                     self.latitude - self.location_tolerance,
                     self.latitude + self.location_tolerance
@@ -157,8 +164,8 @@ class HVACOptimizer:
             # Store model in database
             predictor = Predictor(
                 name=f"HVAC_Optimizer_lat_{self.latitude}_lon_{self.longitude}",
-                framework="scikit-learn",
-                model_type="hvac_optimizer",
+                framework=self.FRAMEWORK_SCIKIT_LEARN,
+                model_type=self.MODEL_TYPE_HVAC_OPTIMIZER,
                 latitude=self.latitude,
                 longitude=self.longitude,
                 knowledge_id=knowledge_id,
@@ -262,7 +269,7 @@ class HVACOptimizer:
         })
         y_off = pd.DataFrame({
             'indoor_temp': hvac_off_in,
-            'energy_consumption': energy_consumption_off
+            self.ENERGY_CONSUMPTION_KEY: energy_consumption_off
         })
         
         # Create DataFrames for HVAC ON
@@ -289,7 +296,7 @@ class HVACOptimizer:
         
         y_on = pd.DataFrame({
             'indoor_temp': hvac_on_in,
-            'energy_consumption': energy_consumption_on
+            self.ENERGY_CONSUMPTION_KEY: energy_consumption_on
         })
         
         return x_off, y_off, x_on, y_on
@@ -306,7 +313,7 @@ class HVACOptimizer:
         y_train_mod = pd.DataFrame(y_train['indoor_temp'] - x_train['prev_indoor_temp'])
         
         # Calculate average consumption when AC is OFF
-        avg_cons_off = statistics.mean(y_train['energy_consumption'])
+        avg_cons_off = statistics.mean(y_train[self.ENERGY_CONSUMPTION_KEY])
         
         # Train linear regression
         regr = linear_model.LinearRegression(fit_intercept=False)
@@ -355,7 +362,7 @@ class HVACOptimizer:
         # Select best features based on notebook analysis
         feature_cols = ['prev_indoor_temp', 'outdoor_temp', 'stp', 'hour', 'minute', 'dayofweek', 'month']
         x_features = x_on[feature_cols]
-        y_targets = y_on[['energy_consumption', 'DT']]
+        y_targets = y_on[[self.ENERGY_CONSUMPTION_KEY, 'DT']]
         
         # Split data
         x_train, x_test, y_train, y_test = train_test_split(
@@ -377,10 +384,10 @@ class HVACOptimizer:
         
         # Calculate metrics for energy consumption
         energy_metrics = {
-            'r2_score': float(metrics.r2_score(y_test['energy_consumption'], y_pred[:, 0])),
-            'rmse': float(np.sqrt(metrics.mean_squared_error(y_test['energy_consumption'], y_pred[:, 0]))),
-            'mae': float(metrics.mean_absolute_error(y_test['energy_consumption'], y_pred[:, 0])),
-            'mape': float(metrics.mean_absolute_percentage_error(y_test['energy_consumption'], y_pred[:, 0]))
+            'r2_score': float(metrics.r2_score(y_test[self.ENERGY_CONSUMPTION_KEY], y_pred[:, 0])),
+            'rmse': float(np.sqrt(metrics.mean_squared_error(y_test[self.ENERGY_CONSUMPTION_KEY], y_pred[:, 0]))),
+            'mae': float(metrics.mean_absolute_error(y_test[self.ENERGY_CONSUMPTION_KEY], y_pred[:, 0])),
+            'mape': float(metrics.mean_absolute_percentage_error(y_test[self.ENERGY_CONSUMPTION_KEY], y_pred[:, 0]))
         }
         
         # Calculate metrics for Delta T
@@ -392,7 +399,7 @@ class HVACOptimizer:
         }
         
         metrics_dict = {
-            'energy_consumption': energy_metrics,
+            self.ENERGY_CONSUMPTION_KEY: energy_metrics,
             'delta_t': dt_metrics,
             'feature_importance': dict(zip(feature_cols, rf_model.feature_importances_.tolist()))
         }
@@ -491,12 +498,12 @@ class HVACOptimizer:
         score = comfort_penalty_weight * comfort_penalty + switch_penalty_weight * switch_penalty + total_cons
         
         return {
-            'total_energy_consumption': total_cons,
+            self.TOTAL_ENERGY_CONSUMPTION_KEY: total_cons,
             'comfort_penalty': comfort_penalty,
             'switch_penalty': switch_penalty,
             'temperatures': temp,
             'total_score': score,
-            'avg_deviation_from_setpoint': sum(abs(t - setpoint) for t in temp[1:]) / len(temp[1:])
+            self.AVG_DEVIATION_FROM_SETPOINT_KEY: sum(abs(t - setpoint) for t in temp[1:]) / len(temp[1:])
         }
     
     def biased_random_search(self, starting_temp: float, starting_time: str, 
@@ -614,16 +621,16 @@ class HVACOptimizer:
         
         # Check if OFF maintains comfort
         if result_off['temperatures'][-1] <= setpoint + 1.0:  # Tolerance of 1°C
-            savings_percent = ((result_on['total_energy_consumption'] - result_off['total_energy_consumption']) / 
-                              result_on['total_energy_consumption']) * 100
+            savings_percent = ((result_on[self.TOTAL_ENERGY_CONSUMPTION_KEY] - result_off[self.TOTAL_ENERGY_CONSUMPTION_KEY]) / 
+                              result_on[self.TOTAL_ENERGY_CONSUMPTION_KEY]) * 100
             
             return {
                 'recommended_operation': operation_off,
                 'recommendation_type': 'all_off',
-                'energy_consumption': result_off['total_energy_consumption'],
+                self.ENERGY_CONSUMPTION_KEY: result_off[self.TOTAL_ENERGY_CONSUMPTION_KEY],
                 'temperatures': result_off['temperatures'],
                 'savings_percentage': savings_percent,
-                'avg_deviation_from_setpoint': result_off['avg_deviation_from_setpoint']
+                self.AVG_DEVIATION_FROM_SETPOINT_KEY: result_off[self.AVG_DEVIATION_FROM_SETPOINT_KEY]
             }
         else:
             # Use optimization
@@ -631,16 +638,16 @@ class HVACOptimizer:
                 starting_temp, starting_time, outdoor_temps, setpoint, duration
             )
             
-            savings_percent = ((result_on['total_energy_consumption'] - optimized_result['total_energy_consumption']) / 
-                              result_on['total_energy_consumption']) * 100
+            savings_percent = ((result_on[self.TOTAL_ENERGY_CONSUMPTION_KEY] - optimized_result[self.TOTAL_ENERGY_CONSUMPTION_KEY]) / 
+                              result_on[self.TOTAL_ENERGY_CONSUMPTION_KEY]) * 100
             
             return {
                 'recommended_operation': optimized_result['operation'],
                 'recommendation_type': 'optimized',
-                'energy_consumption': optimized_result['total_energy_consumption'],
+                self.ENERGY_CONSUMPTION_KEY: optimized_result[self.TOTAL_ENERGY_CONSUMPTION_KEY],
                 'temperatures': optimized_result['temperatures'],
                 'savings_percentage': savings_percent,
-                'avg_deviation_from_setpoint': optimized_result['avg_deviation_from_setpoint']
+                self.AVG_DEVIATION_FROM_SETPOINT_KEY: optimized_result[self.AVG_DEVIATION_FROM_SETPOINT_KEY]
             }
     
     def get_evaluation_metrics(self, y_true: List[float], y_pred: List[float]) -> Dict[str, float]:
@@ -705,7 +712,7 @@ class HVACOptimizer:
         db = SessionLocal()
         try:
             models = db.query(Predictor).filter(
-                Predictor.model_type == 'hvac_optimizer'
+                Predictor.model_type == cls.MODEL_TYPE_HVAC_OPTIMIZER
             ).all()
             
             return [{
