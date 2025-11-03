@@ -203,6 +203,104 @@ const handleForecastRequest = (req, res) => {
   }, true); // Forecast request
 };
 
+// Helper function to validate decryption prerequisites
+const validateDecryptionRequest = async (cid, jobRunID) => {
+  if (!cid) {
+    return {
+      error: {
+        jobRunID,
+        status: 'errored',
+        error: 'Missing required parameter: cid',
+        statusCode: 400,
+      }
+    };
+  }
+
+  const vaultEnabled = process.env.VAULT_ENABLED === 'true';
+  if (!vaultEnabled) {
+    return {
+      error: {
+        jobRunID,
+        status: 'errored',
+        error: 'Vault is disabled. Cannot decrypt data.',
+        statusCode: 400,
+      }
+    };
+  }
+
+  const vaultHealthy = await healthCheck();
+  if (!vaultHealthy) {
+    return {
+      error: {
+        jobRunID,
+        status: 'errored',
+        error: 'Vault is not healthy. Cannot decrypt data.',
+        statusCode: 503,
+      }
+    };
+  }
+
+  return { success: true };
+};
+
+// Helper function to handle cost file response
+const handleCostFileResponse = (decryptedBuffer, metadata, req, res, jobRunID, cid) => {
+  const filename = metadata.filename || 'file';
+  const accept = (req.headers && (req.headers.accept || '')) || '';
+  const wantsDownload = (req.query && (req.query.download === 'true' || req.query.raw === 'true')) || 
+                       accept.includes('application/octet-stream') || 
+                       accept.includes('application/vnd.openxmlformats-officedocument');
+
+  if (wantsDownload) {
+    // Determine a sensible content type from filename
+    const ext = path.extname(filename).toLowerCase();
+    let contentType = 'application/octet-stream';
+    if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    else if (ext === '.csv') contentType = 'text/csv';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename.replaceAll('"', '')}"`);
+    return res.status(200).send(decryptedBuffer);
+  }
+
+  // Default: return base64 JSON for backward compatibility
+  const b64 = decryptedBuffer.toString('base64');
+  console.log(`✅ Decrypted binary cost file for CID: ${cid}, filename: ${filename}`);
+  return res.status(200).json({
+    jobRunID,
+    cid,
+    data: {
+      filename: filename,
+      content_base64: b64,
+      encoding: 'base64'
+    },
+    metadata: {
+      timestamp: metadata.timestamp,
+      filename: filename,
+      job_id: metadata.job_id,
+      data_type: metadata.data_type,
+      algorithm: metadata.algorithm
+    },
+    statusCode: 200,
+  });
+};
+
+// Helper function to decrypt and parse data from IPFS
+const decryptDataFromIpfs = async (cid, metadata) => {
+  const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
+  const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
+  
+  const decryptionMeta = { cid, ...metadata };
+  const decryptedStream = await decryptFromIpfsToStream(decryptionMeta, ipfsApiUrl);
+  
+  // Convert stream to buffer
+  const chunks = [];
+  for await (const chunk of decryptedStream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+};
+
 // Handle decryption requests
 const handleDecryptRequest = async (req, res) => {
   console.log('Decrypt Request Data: ', req.body);
@@ -210,39 +308,13 @@ const handleDecryptRequest = async (req, res) => {
   const { cid } = req.body;
   const jobRunID = uuidv4();
   
-  // Validate required parameters
-  if (!cid) {
-    return res.status(400).json({
-      jobRunID,
-      status: 'errored',
-      error: 'Missing required parameter: cid',
-      statusCode: 400,
-    });
-  }
-  
-  const vaultEnabled = process.env.VAULT_ENABLED === 'true';
-  
   try {
-    if (!vaultEnabled) {
-      return res.status(400).json({
-        jobRunID,
-        status: 'errored',
-        error: 'Vault is disabled. Cannot decrypt data.',
-        statusCode: 400,
-      });
+    // Validate prerequisites
+    const validation = await validateDecryptionRequest(cid, jobRunID);
+    if (validation.error) {
+      return res.status(validation.error.statusCode).json(validation.error);
     }
-    
-    // Check Vault connection
-    const vaultHealthy = await healthCheck();
-    if (!vaultHealthy) {
-      return res.status(503).json({
-        jobRunID,
-        status: 'errored',
-        error: 'Vault is not healthy. Cannot decrypt data.',
-        statusCode: 503,
-      });
-    }
-    
+
     console.log(`🔓 Decrypting data for CID: ${cid}`);
     
     // Get CID mapping from Vault
@@ -255,67 +327,16 @@ const handleDecryptRequest = async (req, res) => {
         statusCode: 404,
       });
     }
-    
-    // Get IPFS URL from environment
-    const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
-    const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
-    
+
     // Decrypt data from IPFS
-    const decryptionMeta = {
-      cid,
-      ...metadata
-    };
-    const decryptedStream = await decryptFromIpfsToStream(decryptionMeta, ipfsApiUrl);
-    
-    // Convert stream to buffer
-    const chunks = [];
-    for await (const chunk of decryptedStream) {
-      chunks.push(chunk);
-    }
-    const decryptedBuffer = Buffer.concat(chunks);
+    const decryptedBuffer = await decryptDataFromIpfs(cid, metadata);
 
-    // If this payload is a cost file (binary like Excel), return it raw (base64) + filename
+    // Handle cost files differently
     if (metadata?.data_type === 'costs') {
-      const filename = metadata.filename || 'file';
-      const accept = (req.headers && (req.headers.accept || '')) || '';
-      const wantsDownload = (req.query && (req.query.download === 'true' || req.query.raw === 'true')) || accept.includes('application/octet-stream') || accept.includes('application/vnd.openxmlformats-officedocument');
-
-      if (wantsDownload) {
-        // Determine a sensible content type from filename
-        const ext = path.extname(filename).toLowerCase();
-        let contentType = 'application/octet-stream';
-        if (ext === '.xlsx') contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-        else if (ext === '.csv') contentType = 'text/csv';
-
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Disposition', `attachment; filename="${filename.replaceAll('"', '')}"`);
-        // Send raw bytes directly so Postman can save file as binary
-        return res.status(200).send(decryptedBuffer);
-      }
-
-      // Default: return base64 JSON for backward compatibility
-      const b64 = decryptedBuffer.toString('base64');
-      console.log(`✅ Decrypted binary cost file for CID: ${cid}, filename: ${filename}`);
-      return res.status(200).json({
-        jobRunID,
-        cid,
-        data: {
-          filename: filename,
-          content_base64: b64,
-          encoding: 'base64'
-        },
-        metadata: {
-          timestamp: metadata.timestamp,
-          filename: filename,
-          job_id: metadata.job_id,
-          data_type: metadata.data_type,
-          algorithm: metadata.algorithm
-        },
-        statusCode: 200,
-      });
+      return handleCostFileResponse(decryptedBuffer, metadata, req, res, jobRunID, cid);
     }
 
-    // Otherwise assume decrypted content is UTF-8 JSON and parse
+    // Parse JSON data for non-cost files
     const decryptedString = decryptedBuffer.toString('utf8');
     let decryptedData;
     try {
@@ -324,8 +345,7 @@ const handleDecryptRequest = async (req, res) => {
       throw new Error(`Decrypted payload is not JSON: ${e.message}`);
     }
 
-    // Extract the actual weather content from the response array
-    // Filter out QoE data and return only the weather service data
+    // Extract weather data (filter out QoE data)
     const weatherData = decryptedData.filter(item => 
       item.service && (item.service === 'openweather' || item.service === 'openmeteo')
     );
@@ -358,6 +378,119 @@ const handleDecryptRequest = async (req, res) => {
   }
 };
 
+// Helper function to check Vault health status
+const checkVaultHealth = async () => {
+  const vaultEnabled = process.env.VAULT_ENABLED === 'true';
+  
+  if (!vaultEnabled) {
+    return {
+      status: 'disabled',
+      enabled: false
+    };
+  }
+
+  try {
+    const vaultHealthy = await healthCheck();
+    return {
+      status: vaultHealthy ? 'healthy' : 'unhealthy',
+      endpoint: process.env.VAULT_ENDPOINT || 'not configured',
+      enabled: true
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      error: error.message,
+      endpoint: process.env.VAULT_ENDPOINT || 'not configured',
+      enabled: true
+    };
+  }
+};
+
+// Helper function to check IPFS health status
+const checkIpfsHealth = async () => {
+  try {
+    const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
+    const testResponse = await fetch(`${ipfsUrl.replace('/api/v0', '')}/api/v0/version`, {
+      method: 'POST',
+      headers: process.env.IPFS_AUTH_TOKEN ? {
+        'Authorization': `Basic ${process.env.IPFS_AUTH_TOKEN}`
+      } : {}
+    });
+    
+    return {
+      status: testResponse.ok ? 'healthy' : 'unhealthy',
+      endpoint: ipfsUrl,
+      version: testResponse.ok ? (await testResponse.json()).Version : 'unknown'
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      error: error.message,
+      endpoint: process.env.IPFS_URL || 'not configured'
+    };
+  }
+};
+
+// Helper function to check weather APIs health status
+const checkWeatherApisHealth = async () => {
+  const results = {};
+  
+  // Test OpenWeather API
+  const openWeatherKey = process.env.OPENWEATHER_API_KEY;
+  if (openWeatherKey) {
+    try {
+      const testWeatherResponse = await fetch(
+        `https://api.openweathermap.org/data/2.5/weather?lat=0&lon=0&appid=${openWeatherKey}`
+      );
+      results.openweather = {
+        status: testWeatherResponse.ok ? 'healthy' : 'unhealthy',
+        api_key_configured: Boolean(openWeatherKey)
+      };
+    } catch (error) {
+      results.openweather = {
+        status: 'error',
+        error: error.message,
+        api_key_configured: Boolean(openWeatherKey)
+      };
+    }
+  } else {
+    results.openweather = {
+      status: 'not_configured',
+      api_key_configured: false
+    };
+  }
+  
+  // Test OpenMeteo API (no key required)
+  try {
+    const testMeteoResponse = await fetch(
+      'https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&current_weather=true'
+    );
+    results.openmeteo = {
+      status: testMeteoResponse.ok ? 'healthy' : 'unhealthy'
+    };
+  } catch (error) {
+    results.openmeteo = {
+      status: 'error',
+      error: error.message
+    };
+  }
+  
+  return results;
+};
+
+// Helper function to determine overall health status
+const determineOverallStatus = (services) => {
+  const hasUnhealthyService = Object.values(services).some(service => 
+    service.status === 'unhealthy' || service.status === 'error'
+  );
+  
+  if (hasUnhealthyService) {
+    return { status: 'degraded', code: 503 };
+  }
+  
+  return { status: 'healthy', code: 200 };
+};
+
 // Handle health check requests
 const handleHealthRequest = async (req, res) => {
   const jobRunID = uuidv4();
@@ -366,117 +499,25 @@ const handleHealthRequest = async (req, res) => {
     services: {}
   };
   
-  let overallStatus = 'healthy';
-  let statusCode = 200;
-  
   try {
-    // Check Vault health
-    const vaultEnabled = process.env.VAULT_ENABLED === 'true';
-    if (vaultEnabled) {
-      try {
-        const vaultHealthy = await healthCheck();
-        healthStatus.services.vault = {
-          status: vaultHealthy ? 'healthy' : 'unhealthy',
-          endpoint: process.env.VAULT_ENDPOINT || 'not configured',
-          enabled: true
-        };
-        if (!vaultHealthy) {
-          overallStatus = 'degraded';
-          statusCode = 503;
-        }
-      } catch (error) {
-        healthStatus.services.vault = {
-          status: 'error',
-          error: error.message,
-          endpoint: process.env.VAULT_ENDPOINT || 'not configured',
-          enabled: true
-        };
-        overallStatus = 'degraded';
-        statusCode = 503;
-      }
-    } else {
-      healthStatus.services.vault = {
-        status: 'disabled',
-        enabled: false
-      };
-    }
+    // Check all services
+    const [vaultHealth, ipfsHealth, weatherHealth] = await Promise.all([
+      checkVaultHealth(),
+      checkIpfsHealth(),
+      checkWeatherApisHealth()
+    ]);
     
-    // Check IPFS health
-    try {
-      const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
-      const testResponse = await fetch(`${ipfsUrl.replace('/api/v0', '')}/api/v0/version`, {
-        method: 'POST',
-        headers: process.env.IPFS_AUTH_TOKEN ? {
-          'Authorization': `Basic ${process.env.IPFS_AUTH_TOKEN}`
-        } : {}
-      });
-      
-      healthStatus.services.ipfs = {
-        status: testResponse.ok ? 'healthy' : 'unhealthy',
-        endpoint: ipfsUrl,
-        version: testResponse.ok ? (await testResponse.json()).Version : 'unknown'
-      };
-      
-      if (!testResponse.ok) {
-        overallStatus = 'degraded';
-        statusCode = 503;
-      }
-    } catch (error) {
-      healthStatus.services.ipfs = {
-        status: 'error',
-        error: error.message,
-        endpoint: process.env.IPFS_URL || 'not configured'
-      };
-      overallStatus = 'degraded';
-      statusCode = 503;
-    }
+    // Aggregate results
+    healthStatus.services.vault = vaultHealth;
+    healthStatus.services.ipfs = ipfsHealth;
+    healthStatus.services = { ...healthStatus.services, ...weatherHealth };
     
-    // Check Weather APIs
-    try {
-      // Test OpenWeather API
-      const openWeatherKey = process.env.OPENWEATHER_API_KEY;
-      if (openWeatherKey) {
-        const testWeatherResponse = await fetch(
-          `https://api.openweathermap.org/data/2.5/weather?lat=0&lon=0&appid=${openWeatherKey}`
-        );
-        healthStatus.services.openweather = {
-          status: testWeatherResponse.ok ? 'healthy' : 'unhealthy',
-          api_key_configured: Boolean(openWeatherKey)
-        };
-      } else {
-        healthStatus.services.openweather = {
-          status: 'not_configured',
-          api_key_configured: false
-        };
-      }
-      
-      // Test OpenMeteo API (no key required)
-      const testMeteoResponse = await fetch(
-        'https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0&current_weather=true'
-      );
-      healthStatus.services.openmeteo = {
-        status: testMeteoResponse.ok ? 'healthy' : 'unhealthy'
-      };
-      
-      if (!testWeatherResponse.ok && !testMeteoResponse.ok) {
-        overallStatus = 'degraded';
-        if (statusCode === 200) statusCode = 503;
-      }
-    } catch (error) {
-      healthStatus.services.weather_apis = {
-        status: 'error',
-        error: error.message
-      };
-      overallStatus = 'degraded';
-      if (statusCode === 200) statusCode = 503;
-    }
-    
-    // Overall health assessment
+    // Determine overall status
+    const { status: overallStatus, code: statusCode } = determineOverallStatus(healthStatus.services);
     healthStatus.overall_status = overallStatus;
     healthStatus.jobRunID = jobRunID;
     
     console.log(`🎡 Health check completed: ${overallStatus}`);
-    
     res.status(statusCode).json(healthStatus);
     
   } catch (error) {

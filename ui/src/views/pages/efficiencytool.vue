@@ -97,7 +97,7 @@
             { title: 'Saved Last 30 Days', value: '15.7 kWhr' },
             { title: 'Environmental Points Earned', value: '155' },
           ]"
-        >        import { CIcon } from '@coreui/icons-vue'
+        >
           <template #icon>
             <img src="/reward-svgrepo-com.svg" alt="Reward" height="52" class="my-4" />
           </template>
@@ -233,14 +233,29 @@
 
 <script setup>
 import { CChartLine } from '@coreui/vue-chartjs'
-import ServicesTable from '@/components/ServicesTable.vue'
 import RatingOne from '@/components/Rating.vue'
 import EnergyBarChart from '@/components/EnergyBarChart.vue'
 import HvacScheduleTable from '@/components/HvacScheduleTable.vue'
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
-import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CButton, CTooltip, CFormRange, CFormSwitch, CDropdown, CDropdownToggle, CDropdownMenu, CSpinner, CAlert } from '@coreui/vue'
+import { ref, computed, watch } from 'vue'
+import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CFormRange, CFormSwitch, CDropdown, CDropdownToggle, CDropdownMenu, CSpinner, CAlert } from '@coreui/vue'
 import { useControlStore } from '@/stores/control.js'
 import { useAlertsStore } from '@/stores/alerts.js'
+
+// Helper function for random number generation
+function getSecureRandom() {
+  // Use crypto.getRandomValues if available (browsers), fallback to Math.random for compatibility
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    return crypto.getRandomValues(new Uint32Array(1))[0] / (0xffffffff + 1);
+  }
+  return Math.random();
+}
+
+function randn_bm() {
+  let u = 0, v = 0;
+  while(u === 0) u = getSecureRandom();
+  while(v === 0) v = getSecureRandom();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
 
 const chartKey = ref(0)
 
@@ -272,10 +287,10 @@ const now = new Date();
 now.setMilliseconds(0);
 now.setSeconds(0);
 let min = now.getMinutes();
-if (min % 5 !== 0) {
-  now.setMinutes(min + (5 - (min % 5)));
-} else {
+if (min % 5 === 0) {
   now.setMinutes(min);
+} else {
+  now.setMinutes(min + (5 - (min % 5)));
 }
 const pastPoints = 72; // 6h * 60 / 5 = 72
 const futurePoints = 73; // 6h * 60 / 5 + 1 = 73
@@ -286,15 +301,40 @@ const chartLabels = Array.from({ length: totalPoints }, (_, i) => {
   return d.toISOString().slice(0, 16).replace('T', ' '); // 'YYYY-MM-DD HH:mm'
 });
 
-const chartData = computed(() => {
-  const hours = controlStore.get24HourSchedule ? controlStore.get24HourSchedule() : [];
-  const points = totalPoints;
-  function randn_bm() {
-    let u = 0, v = 0;
-    while(u === 0) u = Math.random();
-    while(v === 0) v = Math.random();
-    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+// Helper function to generate control schedule data
+function generateControlScheduleData(points, startDate, controlStore) {
+  const control = new Array(points).fill(0);
+  if (!Array.isArray(controlStore.schedule)) {
+    return control;
   }
+  
+  for (const period of controlStore.schedule) {
+    if (!period.enabled) continue;
+    
+    const [sh, sm] = period.start.split(':').map(Number);
+    const [eh, em] = period.end.split(':').map(Number);
+    let schedStart = new Date(startDate);
+    schedStart.setHours(sh, sm, 0, 0);
+    let schedEnd = new Date(startDate);
+    schedEnd.setHours(eh, em, 0, 0);
+    
+    if (schedEnd <= schedStart) {
+      schedEnd.setDate(schedEnd.getDate() + 1);
+    }
+    
+    for (let i = 0; i < points; i++) {
+      const t = new Date(startDate.getTime() + i * 5 * 60000);
+      if (t >= schedStart && t < schedEnd) {
+        control[i] = 0.5;
+      }
+    }
+  }
+  
+  return control;
+}
+
+const chartData = computed(() => {
+  const points = totalPoints;
   const indoor = Array.from({ length: points }, (_, i) =>
     i < pastPoints ? 23 + 0.01 * i + randn_bm() * 0.15 : null
   );
@@ -383,7 +423,7 @@ const chartData = computed(() => {
         label: 'Outdoor Temperature (°C) [Service 1]',
         backgroundColor: 'rgba(244, 67, 54, 0.15)',
         borderColor: '#d32f2f',
-        data: outdoor.map(v => v !== null ? v + 0.5 : null),
+        data: outdoor.map(v => v === null ? null : v + 0.5),
         fill: false,
         tension: 0.4,
         yAxisID: 'y'
@@ -393,7 +433,7 @@ const chartData = computed(() => {
         backgroundColor: 'rgba(244, 67, 54, 0.15)',
         borderColor: '#d32f2f',
         borderDash: [5, 5],
-        data: forecast.map(v => v !== null ? v + 0.5 : null),
+        data: forecast.map(v => v === null ? null : v + 0.5),
         fill: false,
         tension: 0.4,
         pointStyle: 'rectRot',
@@ -414,7 +454,7 @@ const chartData = computed(() => {
         label: 'Outdoor Temperature (°C) [Service 2]',
         backgroundColor: 'rgba(0, 188, 212, 0.15)',
         borderColor: '#0097a7',
-        data: outdoor.map(v => v !== null ? v - 0.5 : null),
+        data: outdoor.map(v => v === null ? null : v - 0.5),
         fill: false,
         tension: 0.4,
         yAxisID: 'y'
@@ -424,7 +464,7 @@ const chartData = computed(() => {
         backgroundColor: 'rgba(0, 188, 212, 0.15)',
         borderColor: '#0097a7',
         borderDash: [5, 5],
-        data: forecast.map(v => v !== null ? v - 0.5 : null),
+        data: forecast.map(v => v === null ? null : v - 0.5),
         fill: false,
         tension: 0.4,
         pointStyle: 'rectRot',
@@ -435,39 +475,16 @@ const chartData = computed(() => {
 
   // Collect datasets for selected services
   let datasets = [];
-  selectedServices.value.forEach(service => {
+  for (const service of selectedServices.value) {
     if (serviceToDataset[service]) {
       datasets = datasets.concat(serviceToDataset[service]);
     }
-  });
+  }
 
   // Always show control schedule
     datasets.push({
       label: 'Control Schedule',
-      data: (() => {
-        const control = Array(points).fill(0);
-        if (Array.isArray(controlStore.schedule)) {
-          for (const period of controlStore.schedule) {
-            if (!period.enabled) continue;
-            const [sh, sm] = period.start.split(':').map(Number);
-            const [eh, em] = period.end.split(':').map(Number);
-            let schedStart = new Date(startDate);
-            schedStart.setHours(sh, sm, 0, 0);
-            let schedEnd = new Date(startDate);
-            schedEnd.setHours(eh, em, 0, 0);
-            if (schedEnd <= schedStart) {
-              schedEnd.setDate(schedEnd.getDate() + 1);
-            }
-            for (let i = 0; i < points; i++) {
-              const t = new Date(startDate.getTime() + i * 5 * 60000);
-              if (t >= schedStart && t < schedEnd) {
-                control[i] = 0.5;
-              }
-            }
-          }
-        }
-        return control;
-      })(),
+      data: generateControlScheduleData(points, startDate, controlStore),
       type: 'line',
       borderColor: '#388e3c',
       backgroundColor: 'rgba(76,175,80,0.1)',
@@ -484,7 +501,7 @@ const chartData = computed(() => {
     // Find start index for next hour (after pastPoints)
     const startIdx = pastPoints;
     // Build array for chart length, fill with null except for next 12 intervals
-    const optControlArr = Array(points).fill(null);
+    const optControlArr = new Array(points).fill(null);
     for (let i = 0; i < 12; i++) {
       optControlArr[startIdx + i] = optimizedControl.value[i] ? 0.5 : 0;
     }
@@ -502,7 +519,7 @@ const chartData = computed(() => {
       pointRadius: 2,
       order: 3
     });
-    const optIndoorArr = Array(points).fill(null);
+    const optIndoorArr = new Array(points).fill(null);
     for (let i = 0; i < 12; i++) {
       // Make optimized indoor forecast close to indoor (blue) line, but not identical
       optIndoorArr[startIdx + i] = (indoor[startIdx + i] ?? 24) * 0.8 + (optimizedIndoorForecast.value[i] ?? 25) * 0.2;
@@ -645,14 +662,12 @@ function toggleService(service) {
   const idx = selectedServices.value.indexOf(service)
   if (idx === -1) {
     selectedServices.value.push(service)
-  } else {
+  } else if (selectedServices.value.length > 1) {
     // Only allow deselection if more than one is selected
-    if (selectedServices.value.length > 1) {
-      selectedServices.value.splice(idx, 1)
-      // If all are deselected, auto-select 'weather'
-      if (selectedServices.value.length === 0) {
-        selectedServices.value.push('weather');
-      }
+    selectedServices.value.splice(idx, 1)
+    // If all are deselected, auto-select 'weather'
+    if (selectedServices.value.length === 0) {
+      selectedServices.value.push('weather');
     }
   }
 }
@@ -769,12 +784,9 @@ function dropdownLabel() {
     justify-content: flex-end;
   }
   .slider-row-responsive {
-    margin-top: 0.5rem;
+    margin-top: 1rem;
     width: 100%;
     max-width: 100vw;
-  }
-  .slider-row-responsive {
-    margin-top: 1rem;
   }
 }
 .control-block {

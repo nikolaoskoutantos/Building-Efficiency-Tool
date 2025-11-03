@@ -1,7 +1,6 @@
 import { defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { cilExternalLink } from '@coreui/icons'
 import { CBadge, CSidebarNav, CNavItem, CNavGroup, CNavTitle } from '@coreui/vue'
 import nav from '@/_nav.js'
 
@@ -55,121 +54,128 @@ const AppSidebarNav = defineComponent({
       firstRender.value = false
     })
 
+    const renderIcon = (icon) => {
+      return icon
+        ? h(resolveComponent('CIcon'), {
+            customClassName: 'nav-icon',
+            name: icon,
+          })
+        : h('span', { class: 'nav-icon' }, h('span', { class: 'nav-icon-bullet' }))
+    }
+
+    const renderBadge = (badge) => {
+      return badge
+        ? h(
+            CBadge,
+            {
+              class: 'ms-auto',
+              color: badge.color,
+              size: 'sm',
+            },
+            {
+              default: () => badge.text,
+            },
+          )
+        : null
+    }
+
+    const renderExternalLink = (item) => {
+      return h(
+        resolveComponent(item.component),
+        {
+          href: item.href,
+          target: '_blank',
+          rel: 'noopener noreferrer',
+        },
+        {
+          default: () => [
+            renderIcon(item.icon),
+            item.name,
+            item.external && h(resolveComponent('CIcon'), {
+              class: 'ms-2',
+              name: 'cil-external-link',
+              size: 'sm'
+            }),
+            renderBadge(item.badge),
+          ],
+        },
+      )
+    }
+
+    const renderRouterLink = (item) => {
+      return h(
+        RouterLink,
+        {
+          to: item.to,
+          custom: true,
+        },
+        {
+          default: (props) =>
+            h(
+              resolveComponent(item.component),
+              {
+                active: props.isActive,
+                as: 'div',
+                href: props.href,
+                onClick: () => props.navigate(),
+              },
+              {
+                default: () => [
+                  renderIcon(item.icon),
+                  item.name,
+                  renderBadge(item.badge),
+                ],
+              },
+            ),
+        },
+      )
+    }
+
+    const renderNavGroup = (item) => {
+      return h(
+        CNavGroup,
+        {
+          as: 'div',
+          compact: true,
+          ...(firstRender.value && {
+            visible: item.items.some((child) => isActiveItem(route, child)),
+          }),
+        },
+        {
+          togglerContent: () => [
+            h(resolveComponent('CIcon'), {
+              customClassName: 'nav-icon',
+              name: item.icon,
+            }),
+            item.name,
+          ],
+          default: () => item.items.map((child) => renderItem(child)),
+        },
+      )
+    }
+
     const renderItem = (item) => {
       if (item.items) {
-        return h(
-          CNavGroup,
-          {
-            as: 'div',
-            compact: true,
-            ...(firstRender.value && {
-              visible: item.items.some((child) => isActiveItem(route, child)),
-            }),
-          },
-          {
-            togglerContent: () => [
-              h(resolveComponent('CIcon'), {
-                customClassName: 'nav-icon',
-                name: item.icon,
-              }),
-              item.name,
-            ],
-            default: () => item.items.map((child) => renderItem(child)),
-          },
-        )
+        return renderNavGroup(item)
       }
 
       if (item.href) {
-        return h(
-          resolveComponent(item.component),
-          {
-            href: item.href,
-            target: '_blank',
-            rel: 'noopener noreferrer',
-          },
-          {
-            default: () => [
-              item.icon
-                ? h(resolveComponent('CIcon'), {
-                    customClassName: 'nav-icon',
-                    name: item.icon,
-                  })
-                : h('span', { class: 'nav-icon' }, h('span', { class: 'nav-icon-bullet' })),
-              item.name,
-              item.external && h(resolveComponent('CIcon'), {
-                class: 'ms-2',
-                name: 'cil-external-link',
-                size: 'sm'
-              }),
-              item.badge &&
-                h(
-                  CBadge,
-                  {
-                    class: 'ms-auto',
-                    color: item.badge.color,
-                    size: 'sm',
-                  },
-                  {
-                    default: () => item.badge.text,
-                  },
-                ),
-            ],
-          },
-        )
+        return renderExternalLink(item)
       }
 
-      return item.to
-        ? h(
-            RouterLink,
-            {
-              to: item.to,
-              custom: true,
-            },
-            {
-              default: (props) =>
-                h(
-                  resolveComponent(item.component),
-                  {
-                    active: props.isActive,
-                    as: 'div',
-                    href: props.href,
-                    onClick: () => props.navigate(),
-                  },
-                  {
-                    default: () => [
-                      item.icon
-                        ? h(resolveComponent('CIcon'), {
-                            customClassName: 'nav-icon',
-                            name: item.icon,
-                          })
-                        : h('span', { class: 'nav-icon' }, h('span', { class: 'nav-icon-bullet' })),
-                      item.name,
-                      item.badge &&
-                        h(
-                          CBadge,
-                          {
-                            class: 'ms-auto',
-                            color: item.badge.color,
-                            size: 'sm',
-                          },
-                          {
-                            default: () => item.badge.text,
-                          },
-                        ),
-                    ],
-                  },
-                ),
-            },
-          )
-        : h(
-            resolveComponent(item.component),
-            {
-              as: 'div',
-            },
-            {
-              default: () => item.name,
-            },
-          )
+      if (item.to) {
+        return renderRouterLink(item)
+      }
+
+      return h(
+        resolveComponent(item.component),
+        {
+          as: 'div',
+        },
+        {
+          default: () => item.name,
+        },
+      )
     }
 
     return () =>
