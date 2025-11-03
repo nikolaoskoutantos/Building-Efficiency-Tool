@@ -27,6 +27,9 @@ class HVACOptimizer:
     Features location-aware model storage and retrieval based on latitude/longitude.
     """
     
+    # Constants
+    MODEL_NOT_TRAINED_ERROR = "Model not trained. Please train the model first."
+    
     def __init__(self, latitude: float, longitude: float, location_tolerance: float = 0.01):
         """
         Initialize HVAC Optimizer for a specific location.
@@ -359,8 +362,14 @@ class HVACOptimizer:
             x_features, y_targets, train_size=0.8, test_size=0.2, random_state=0
         )
         
-        # Train Random Forest
-        rf_model = RandomForestRegressor(n_estimators=100, max_depth=25, random_state=0)
+        # Explicitly set all relevant hyperparameters for reproducibility and SonarQube compliance
+        rf_model = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=25,
+            min_samples_leaf=1,
+            max_features='auto',
+            random_state=0
+        )
         rf_model.fit(x_train, y_train)
         
         # Evaluate model
@@ -413,7 +422,7 @@ class HVACOptimizer:
             Tuple of (total_energy_consumption, temperature_predictions)
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(self.MODEL_NOT_TRAINED_ERROR)
         
         temp = [starting_temp]
         start = datetime.strptime(starting_time, '%d/%m/%Y %H:%M')
@@ -463,7 +472,7 @@ class HVACOptimizer:
             Dict containing energy consumption, comfort penalty, switch penalty, temperatures, and total score
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(self.MODEL_NOT_TRAINED_ERROR)
         
         comfort_penalty_weight = 50
         switch_penalty_weight = 10
@@ -500,33 +509,84 @@ class HVACOptimizer:
             Dict containing best operation schedule and its evaluation
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(self.MODEL_NOT_TRAINED_ERROR)
         
         best_score = float('inf')
         best_result = None
         
         for num_switches in [1, 2]:
-            for switches in combinations(range(duration), num_switches):
-                for starting_operation in [0, 1]:
-                    operation = []
-                    current = starting_operation
-                    operation.append(current)
-                    
-                    for i in range(duration):
-                        if i in switches:
-                            current ^= 1
-                        operation.append(current)
-                    
-                    result = self.evaluate_schedule(
-                        operation, starting_temp, starting_time, outdoor_temps, setpoint, duration
-                    )
-                    result['operation'] = operation
-                    
-                    if result['total_score'] < best_score:
-                        best_score = result['total_score']
-                        best_result = result
+            result = self._search_with_switches(
+                num_switches, starting_temp, starting_time, outdoor_temps, setpoint, duration
+            )
+            if result and result['total_score'] < best_score:
+                best_score = result['total_score']
+                best_result = result
         
         return best_result
+    
+    def _search_with_switches(self, num_switches: int, starting_temp: float, 
+                             starting_time: str, outdoor_temps: List[float], 
+                             setpoint: float, duration: int) -> Dict[str, Any]:
+        """
+        Search for best operation schedule with a specific number of switches.
+        
+        Returns:
+            Dict containing best operation schedule for this switch count
+        """
+        best_score = float('inf')
+        best_result = None
+        
+        for switches in combinations(range(duration), num_switches):
+            for starting_operation in [0, 1]:
+                operation = self._build_operation_schedule(switches, starting_operation, duration)
+                result = self._evaluate_operation_schedule(
+                    operation, starting_temp, starting_time, outdoor_temps, setpoint, duration
+                )
+                
+                if result['total_score'] < best_score:
+                    best_score = result['total_score']
+                    best_result = result
+        
+        return best_result
+    
+    def _build_operation_schedule(self, switches: tuple, starting_operation: int, 
+                                 duration: int) -> List[int]:
+        """
+        Build operation schedule based on switch points and starting operation.
+        
+        Args:
+            switches: Tuple of time points where operation switches
+            starting_operation: Initial operation state (0 or 1)
+            duration: Total duration in time steps
+            
+        Returns:
+            List of operation states for each time step
+        """
+        operation = []
+        current = starting_operation
+        operation.append(current)
+        
+        for i in range(duration):
+            if i in switches:
+                current ^= 1
+            operation.append(current)
+        
+        return operation
+    
+    def _evaluate_operation_schedule(self, operation: List[int], starting_temp: float, 
+                                   starting_time: str, outdoor_temps: List[float], 
+                                   setpoint: float, duration: int) -> Dict[str, Any]:
+        """
+        Evaluate an operation schedule and return results with operation included.
+        
+        Returns:
+            Dict containing evaluation results with operation schedule
+        """
+        result = self.evaluate_schedule(
+            operation, starting_temp, starting_time, outdoor_temps, setpoint, duration
+        )
+        result['operation'] = operation
+        return result
     
     def normal_conditions_optimizer(self, starting_temp: float, starting_time: str, 
                                   outdoor_temps: List[float], setpoint: float, 
@@ -538,7 +598,7 @@ class HVACOptimizer:
             Dict containing recommended operation and savings analysis
         """
         if not self._is_model_ready():
-            raise ValueError("Model not trained. Please train the model first.")
+            raise ValueError(self.MODEL_NOT_TRAINED_ERROR)
         
         # Test all OFF operation
         operation_off = [0] * duration
