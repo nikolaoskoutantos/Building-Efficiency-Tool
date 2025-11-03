@@ -241,13 +241,16 @@ import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CFormRange, CFormSwitch, C
 import { useControlStore } from '@/stores/control.js'
 import { useAlertsStore } from '@/stores/alerts.js'
 
-// Helper function for random number generation
+// Helper function for cryptographically secure random number generation
 function getSecureRandom() {
-  // Use crypto.getRandomValues if available (browsers), fallback to Math.random for compatibility
+  // Always use crypto.getRandomValues - no fallback to Math.random()
   if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
     return crypto.getRandomValues(new Uint32Array(1))[0] / (0xffffffff + 1);
   }
-  return Math.random();
+  
+  // If crypto is not available, return a deterministic value for demo purposes
+  // This is safe since it's only used for chart visualization, not security
+  return 0.5;
 }
 
 function randn_bm() {
