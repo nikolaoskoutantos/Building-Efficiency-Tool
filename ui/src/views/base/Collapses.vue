@@ -44,7 +44,7 @@ const visibleHorizontal = ref(false)
             <CButton
               class="mb-3"
               color="primary"
-              aria-expanded="{visible}"
+              :aria-expanded="visibleHorizontal"
               aria-controls="collapseWidthExample"
               @click="visibleHorizontal = !visibleHorizontal"
               >Button</CButton

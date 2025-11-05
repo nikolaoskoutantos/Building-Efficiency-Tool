@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const dotenv = require('dotenv');
-const path = require('path');
+const path = require('node:path');
 const apiKeyAuth = require('./middleware/apiKeyAuth');
 const cors = require('cors');
 
@@ -18,15 +18,15 @@ if (process.env.COST_DATA_SOURCE) {
     let s = process.env.COST_DATA_SOURCE;
     s = s.trim();
     // remove surrounding single or double quotes
-    s = s.replace(/^['"]+|['"]+$/g, '');
+    s = s.replaceAll(/^(['"])+|(['"])+$/g, '');
     // normalize Windows backslashes to forward slashes for consistent resolution
-    s = s.replace(/\\\\/g, '/').replace(/\\/g, '/');
+    s = s.replaceAll(/\\\\/g, '/').replaceAll(/\\/g, '/');
     process.env.COST_DATA_SOURCE = s;
     const resolved = path.resolve(process.cwd(), s || '');
     console.log('COST_DATA_SOURCE (normalized):', process.env.COST_DATA_SOURCE);
     console.log('COST_DATA_SOURCE resolved path:', resolved);
   } catch (err) {
-    console.warn('Failed to normalize COST_DATA_SOURCE:', err && err.message ? err.message : err);
+    console.warn('Failed to normalize COST_DATA_SOURCE:', err?.message ?? err);
   }
 }
 

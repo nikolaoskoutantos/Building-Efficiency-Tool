@@ -27,7 +27,7 @@ const config = {
   },
   
   // Request timeout in milliseconds (from env or default)
-  timeout: parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000,
+  timeout: Number.parseInt(import.meta.env.VITE_API_TIMEOUT) || 10000,
   
   // Whether to include credentials (cookies) in requests
   withCredentials: true,

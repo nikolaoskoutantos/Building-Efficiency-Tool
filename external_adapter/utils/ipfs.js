@@ -1,5 +1,5 @@
-const path = require('path');
-const fs = require('fs');
+const path = require('node:path');
+const fs = require('node:fs');
 const tmp = require('tmp');
 const FormData = require('form-data');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -9,24 +9,25 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const IPFS_URL = process.env.IPFS_URL || 'http://127.0.0.1:5001/api/v0';
 const IPFS_AUTH_TOKEN = process.env.IPFS_AUTH_TOKEN || ''; // unified auth token
 
-let ipfsClientPromise = null;
+let ipfsClient = null;
 const isLocalNode = IPFS_URL.includes('127.0.0.1') || IPFS_URL.includes('localhost');
 
 if (isLocalNode) {
-  ipfsClientPromise = (async () => {
+  try {
     const { create } = await import('ipfs-http-client');
-    return create({ url: IPFS_URL });
-  })();
+    ipfsClient = create({ url: IPFS_URL });
+  } catch (error) {
+    console.warn('Failed to initialize local IPFS client:', error.message);
+  }
 }
 
 const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
   try {
-    if (isLocalNode && ipfsClientPromise) {
-      const ipfs = await ipfsClientPromise;
-      const { cid } = await ipfs.add({ path: filename, content: data }, { pin: true });
+    if (isLocalNode && ipfsClient) {
+      const { cid } = await ipfsClient.add({ path: filename, content: data }, { pin: true });
 
       const mfsPath = `/${mfsDir}/${filename}`;
-      await ipfs.files.write(mfsPath, data, { create: true, parents: true, truncate: true });
+      await ipfsClient.files.write(mfsPath, data, { create: true, parents: true, truncate: true });
 
       console.log(`✅ Local IPFS: Stored '${filename}' with CID: ${cid}`);
       return cid.toString();
@@ -62,7 +63,7 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
     // Add to MFS (Mutable File System) so it shows in FILES section
     try {
       // First create the directory if it doesn't exist
-      const mkdirResponse = await fetch(`${IPFS_URL}/files/mkdir?arg=/${mfsDir}&parents=true`, {
+      await fetch(`${IPFS_URL}/files/mkdir?arg=/${mfsDir}&parents=true`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
