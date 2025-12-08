@@ -10,7 +10,6 @@
 
 ## Introduction
 
-
 [▶️ Watch Demo Video](https://drive.google.com/file/d/1Q-KotPAkhUK56HEuqAGz5ewtKwkTw41O/view?usp=sharing)
 
 QoE Application is a modular, end-to-end platform for optimizing HVAC energy consumption and integrating off-chain data with smart contracts. It leverages Chainlink oracles, IPFS for decentralized storage, and a secure FastAPI backend with machine learning for real-time predictions and optimization. The system is designed for research and production use in energy management, providing:
