@@ -6,6 +6,15 @@ const vault = require('./vault');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 /**
+ * Escape special regex characters to prevent ReDoS attacks
+ * @param {string} string - User input to escape
+ * @returns {string} Escaped string safe for RegExp
+ */
+function escapeRegex(string) {
+  return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Main handler for cost group requests
  */
 const handleCostGroupRequest = async (req, res) => {
@@ -276,7 +285,8 @@ const applySearch = (data, searchTerms) => {
   const results = [];
   
   for (const term of searchTerms) {
-    const regex = new RegExp(term, 'gi');
+    const escapedTerm = escapeRegex(term);
+    const regex = new RegExp(escapedTerm, 'gi');
     
     for (let i = 0; i < data.length; i++) {
       const item = data[i];
@@ -303,7 +313,8 @@ const applyExtraction = (data, pattern) => {
     throw new Error('extract_pattern is required for extraction queries');
   }
 
-  const regex = new RegExp(pattern, 'gm');
+  const escapedPattern = escapeRegex(pattern);
+  const regex = new RegExp(escapedPattern, 'gm');
   const content = typeof data === 'string' ? data : JSON.stringify(data);
   const matches = [];
   
@@ -404,7 +415,10 @@ const applyFilterCondition = (fieldValue, operator, value) => {
     case 'gte': return Number(fieldValue) >= Number(value);
     case 'lte': return Number(fieldValue) <= Number(value);
     case 'contains': return String(fieldValue).toLowerCase().includes(String(value).toLowerCase());
-    case 'regex': return new RegExp(value).test(String(fieldValue));
+    case 'regex': {
+      const escapedValue = escapeRegex(value);
+      return new RegExp(escapedValue).test(String(fieldValue));
+    }
     default: return false;
   }
 };
