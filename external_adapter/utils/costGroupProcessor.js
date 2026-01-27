@@ -285,14 +285,14 @@ const applySearch = (data, searchTerms) => {
   const results = [];
   
   for (const term of searchTerms) {
-    const escapedTerm = escapeRegex(term);
-    const regex = new RegExp(escapedTerm, 'gi');
+    const lowerTerm = String(term).toLowerCase();
     
     for (let i = 0; i < data.length; i++) {
       const item = data[i];
       const searchable = JSON.stringify(item).toLowerCase();
       
-      if (searchable.match(regex)) {
+      // Use safe string method instead of regex
+      if (searchable.includes(lowerTerm)) {
         results.push({
           ...item,
           _search_match: term,
@@ -306,25 +306,28 @@ const applySearch = (data, searchTerms) => {
 };
 
 /**
- * Apply extraction using regex pattern
+ * Apply extraction using pattern matching
+ * Note: RegEx extraction disabled for security (ReDoS prevention)
  */
 const applyExtraction = (data, pattern) => {
   if (!pattern) {
     throw new Error('extract_pattern is required for extraction queries');
   }
 
-  const escapedPattern = escapeRegex(pattern);
-  const regex = new RegExp(escapedPattern, 'gm');
+  // Security: Do not allow regex patterns from user input (ReDoS vulnerability)
+  // Use simple string search instead
   const content = typeof data === 'string' ? data : JSON.stringify(data);
   const matches = [];
+  const lowerContent = content.toLowerCase();
+  const lowerPattern = String(pattern).toLowerCase();
   
-  let match;
-  while ((match = regex.exec(content)) !== null) {
+  let index = 0;
+  while ((index = lowerContent.indexOf(lowerPattern, index)) !== -1) {
     matches.push({
-      match: match[0],
-      groups: match.slice(1),
-      index: match.index
+      match: content.substring(index, index + pattern.length),
+      index: index
     });
+    index += pattern.length;
   }
   
   return { data: matches, recordCount: matches.length };
@@ -415,10 +418,10 @@ const applyFilterCondition = (fieldValue, operator, value) => {
     case 'gte': return Number(fieldValue) >= Number(value);
     case 'lte': return Number(fieldValue) <= Number(value);
     case 'contains': return String(fieldValue).toLowerCase().includes(String(value).toLowerCase());
-    case 'regex': {
-      const escapedValue = escapeRegex(value);
-      return new RegExp(escapedValue).test(String(fieldValue));
-    }
+    case 'regex': 
+      // Security: RegEx matching disabled (ReDoS vulnerability)
+      // Fall back to contains behavior
+      return String(fieldValue).toLowerCase().includes(String(value).toLowerCase());
     default: return false;
   }
 };
