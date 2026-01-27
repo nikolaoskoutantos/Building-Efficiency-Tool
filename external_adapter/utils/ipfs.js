@@ -12,22 +12,29 @@ const IPFS_AUTH_TOKEN = process.env.IPFS_AUTH_TOKEN || ''; // unified auth token
 let ipfsClient = null;
 const isLocalNode = IPFS_URL.includes('127.0.0.1') || IPFS_URL.includes('localhost');
 
-if (isLocalNode) {
+// Initialize IPFS client asynchronously (not at module load)
+async function getIpfsClient() {
+  if (!isLocalNode) return null;
+  if (ipfsClient) return ipfsClient;
+  
   try {
     const { create } = await import('ipfs-http-client');
     ipfsClient = create({ url: IPFS_URL });
+    return ipfsClient;
   } catch (error) {
     console.warn('Failed to initialize local IPFS client:', error.message);
+    return null;
   }
 }
 
 const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
   try {
-    if (isLocalNode && ipfsClient) {
-      const { cid } = await ipfsClient.add({ path: filename, content: data }, { pin: true });
+    const client = await getIpfsClient();
+    if (isLocalNode && client) {
+      const { cid } = await client.add({ path: filename, content: data }, { pin: true });
 
       const mfsPath = `/${mfsDir}/${filename}`;
-      await ipfsClient.files.write(mfsPath, data, { create: true, parents: true, truncate: true });
+      await client.files.write(mfsPath, data, { create: true, parents: true, truncate: true });
 
       console.log(`✅ Local IPFS: Stored '${filename}' with CID: ${cid}`);
       return cid.toString();

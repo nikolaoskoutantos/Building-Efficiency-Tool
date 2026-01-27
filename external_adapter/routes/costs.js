@@ -7,7 +7,7 @@ const { handleCostsUpload } = require('../utils/uploadCosts');
  * /costs:
  *   post:
  *     summary: Trigger server-side cost upload
- *     description: Trigger the adapter to read the cost file pointed to by the `COST_DATA_SOURCE` environment variable, encrypt it (Vault required) and upload to IPFS. The caller must provide a `job_id` string in the request body.
+ *     description: Trigger the adapter to read the cost file pointed to by the `COST_DATA_SOURCE` environment variable, optionally filter by productIds, encrypt it (Vault required) and upload to IPFS.
  *     requestBody:
  *       required: true
  *       content:
@@ -16,10 +16,23 @@ const { handleCostsUpload } = require('../utils/uploadCosts');
  *             type: object
  *             required:
  *               - job_id
+ *               - buyer
+ *               - pubKey
  *             properties:
  *               job_id:
  *                 type: string
  *                 description: Job identifier to associate with this upload
+ *               buyer:
+ *                 type: string
+ *                 description: Buyer ethereum address
+ *               pubKey:
+ *                 type: string
+ *                 description: Public key for the buyer
+ *               productIds:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 description: Optional array of product IDs to filter. If empty or not provided, entire file is uploaded.
  *     responses:
  *       200:
  *         description: File encrypted and uploaded to IPFS
@@ -34,10 +47,14 @@ const { handleCostsUpload } = require('../utils/uploadCosts');
  *                   type: string
  *                 filename:
  *                   type: string
+ *                 filtered:
+ *                   type: boolean
+ *                 productCount:
+ *                   type: integer
  *                 statusCode:
  *                   type: integer
  *       400:
- *         description: Bad request (missing job_id or COST_DATA_SOURCE)
+ *         description: Bad request (missing required fields or COST_DATA_SOURCE)
  *       503:
  *         description: Vault is not healthy or not available
  *       500:

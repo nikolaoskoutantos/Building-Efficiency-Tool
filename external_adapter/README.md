@@ -68,22 +68,71 @@ This will build and start the external adapter, exposing it on port 8080 by defa
 
 ## API Usage
 
+### Core Endpoints
 - **POST /** — Fetch weather data (see Swagger docs for schema)
 - **POST /decrypt** — Decrypt data from IPFS (if Vault is enabled)
+- **POST /costs** — Upload and encrypt cost data from Excel files  
+- **POST /query** — Process file content with query filters and transformations
 - **GET /health** — Health check endpoint
 - **GET /api-docs** — Swagger UI
 
 All requests (except `/health` and `/api-docs`) require an `x-api-key` header matching your `API_KEY`.
 
+### New Query Controller
+
+The `/query` endpoint allows you to process file content with various query operations:
+
+**Supported Query Types:**
+- `filter` - Apply filter conditions to data
+- `transform` - Apply data transformations (select, rename, sort)
+- `search` - Search for terms within content
+- `extract` - Extract data using regex patterns
+- `aggregate` - Perform aggregation operations (sum, avg, count, min, max)
+
+**File Sources:**
+- `data` - Base64 encoded file content
+- `path` - Local file path
+- `url` - Remote file URL
+
+**Output Formats:**
+- `json` (default)
+- `csv`
+- `xml`
+- `txt`
+
+The query results are automatically encrypted (if Vault is enabled) and uploaded to IPFS, returning only the CID to maintain privacy and reduce blockchain costs.
+
 ---
 
-## Example Request
+## Example Requests
 
+### Weather Request
 ```bash
 curl -X POST http://localhost:8080/ \
   -H "Content-Type: application/json" \
   -H "x-api-key: your_strong_random_key" \
   -d '{"id":"1","data":{"service":"openweather","lat":40,"lon":-74}}'
+```
+
+### Query Request (Filter Example)
+```bash
+curl -X POST http://localhost:8080/query \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your_strong_random_key" \
+  -d '{
+    "id": "query-001",
+    "data": {
+      "query_type": "filter",
+      "file_source": "data",
+      "file_data": "W3sibmFtZSI6IkpvaG4iLCJhZ2UiOjMwfV0=",
+      "query_params": {
+        "filters": [
+          {"field": "age", "operator": "gte", "value": "25"}
+        ]
+      },
+      "output_format": "json"
+    }
+  }'
 ```
 
 **Response:**
