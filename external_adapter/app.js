@@ -18,9 +18,9 @@ if (process.env.COST_DATA_SOURCE) {
     let s = process.env.COST_DATA_SOURCE;
     s = s.trim();
     // remove surrounding single or double quotes
-    s = s.replaceAll(/^(['"])+|(['"])+$/g, '');
+    s = s.replaceAll(/(?:^(['"])+)|(?:(['"])+$)/g, '');
     // normalize Windows backslashes to forward slashes for consistent resolution
-    s = s.replaceAll(/\\\\/g, '/').replaceAll(/\\/g, '/');
+    s = s.replaceAll('\\\\', '/').replaceAll('\\', '/');
     process.env.COST_DATA_SOURCE = s;
     const resolved = path.resolve(process.cwd(), s || '');
     console.log('COST_DATA_SOURCE (normalized):', process.env.COST_DATA_SOURCE);

@@ -10,8 +10,8 @@
 const vault = require('node-vault');
 const axios = require('axios');
 const FormData = require('form-data');
-const { randomBytes, createCipheriv, createDecipheriv } = require('crypto');
-const { Readable, PassThrough } = require('stream');
+const { randomBytes, createCipheriv, createDecipheriv } = require('node:crypto');
+const { Readable, PassThrough } = require('node:stream');
 require('dotenv').config();
 
 const DEFAULT_TRANSIT_KEY = process.env.VAULT_ENCRYPTION_KEY || 'weather-data';
@@ -273,46 +273,6 @@ class VaultService {
     };
     console.log(`[${new Date().toISOString()}] [DEBUG] Result object:`, result);
     return result;
-    
-    // Add encrypted file to MFS for visibility in FILES section
-    try {
-      // First create the directory if it doesn't exist
-      let mkdirUrl, cpUrl;
-      if (ipfsApiUrl.includes('filebase.io')) {
-        // Filebase uses /files/mkdir and /files/cp directly
-        mkdirUrl = `${ipfsApiUrl}/files/mkdir`;
-        cpUrl = `${ipfsApiUrl}/files/cp`;
-      } else {
-        // Classic IPFS nodes use /api/v0/files/
-        mkdirUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/mkdir` : `${ipfsApiUrl}/api/v0/files/mkdir`;
-        cpUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/cp` : `${ipfsApiUrl}/api/v0/files/cp`;
-      }
-      await axios.post(`${mkdirUrl}?arg=/${mfsDir}&parents=true`, {}, {
-        headers: {
-          'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
-        }
-      });
-      
-      const mfsPath = `/${mfsDir}/${cid}.enc`;
-      await axios.post(`${cpUrl}?arg=/ipfs/${cid}&arg=${mfsPath}`, {}, {
-        headers: {
-          'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
-        }
-      });
-      console.log(`[${new Date().toISOString()}] 🔐📁 Added encrypted file to MFS: ${mfsPath}`);
-    } catch (mfsError) {
-      console.log(`[${new Date().toISOString()}] ⚠️ MFS add error for encrypted file: ${mfsError.message}`);
-    }
-
-    // 4) Return metadata; DO NOT persist plaintext DEK
-    return {
-      cid,
-      wrapped_dek: wrappedDek,
-      key_version: keyVersion,
-      alg: 'AES-256-GCM',
-      chunk_bytes: chunkBytes,
-      nonce_mode: 'random' // we embed nonce per chunk
-    };
   }
 
   /**
