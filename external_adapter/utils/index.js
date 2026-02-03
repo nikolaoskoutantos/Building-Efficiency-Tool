@@ -103,14 +103,30 @@ const collectApiResponses = async (lat, lon, service, forecast) => {
 };
 
 const createRequest = async (input, callback, forecast = false) => {
-  // Generate a unique jobRunID
-  const jobRunID = uuidv4();
+  // Use the provided job ID or generate a unique jobRunID
+  const jobRunID = input.id || uuidv4();
 
-  // Extract and normalize parameters
-  const validator = new Validator(callback, input, customParams);
-  const lat = validator.validated.data.lat;
-  const lon = validator.validated.data.lon;
-  const service = validator.validated.data.service;
+  // Extract parameters from the request body format: { id: "string", data: { service, lat, lon } }
+  if (!input.data || typeof input.data !== 'object') {
+    return callback(400, {
+      jobRunID,
+      status: 'errored',
+      error: 'Missing or invalid "data" property in request body',
+      statusCode: 400,
+    });
+  }
+
+  const { lat, lon, service } = input.data;
+
+  // Validate required parameters
+  if (typeof lat !== 'number' || typeof lon !== 'number') {
+    return callback(400, {
+      jobRunID,
+      status: 'errored',
+      error: 'Missing or invalid lat/lon coordinates in data object',
+      statusCode: 400,
+    });
+  }
 
   // Collect responses from APIs
   const responses = await collectApiResponses(lat, lon, service, forecast);
@@ -134,50 +150,59 @@ const createRequest = async (input, callback, forecast = false) => {
     if (vaultEnabled) {
       // Check Vault connection first
       const vaultHealthy = await healthCheck();
-      
       if (vaultHealthy) {
-        console.log('🔐 Using Vault encryption for IPFS upload...');
-        
+        console.log(`[${new Date().toISOString()}] 🔐 Using Vault encryption for IPFS upload...`);
         // Convert JSON to readable stream
         const dataString = JSON.stringify(responses, null, 2);
         const dataStream = Readable.from([dataString]);
-        
         // Get IPFS URL from environment
         const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
         const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
-        
         // Encrypt and upload to IPFS
         const result = await encryptStreamToIpfs(dataStream, ipfsApiUrl, 'weather-data');
-        
+        console.log(`[${new Date().toISOString()}] [DEBUG] encryptStreamToIpfs result:`, result);
         // Store CID mapping in Vault KV
-        await storeCidMapping(result.cid, {
-          wrapped_dek: result.wrapped_dek,
-          key_version: result.key_version,
-          algorithm: result.alg,
-          chunk_bytes: result.chunk_bytes,
-          nonce_mode: result.nonce_mode,
-          timestamp: Date.now(),
-          filename: filename,
-          job_id: jobRunID,
-          data_type: 'weather_data'
-        });
-        
+        try {
+          console.log(`[${new Date().toISOString()}] [Vault] Storing CID mapping for ${result.cid} with metadata:`, result);
+          await storeCidMapping(result.cid, {
+            wrapped_dek: result.wrapped_dek,
+            key_version: result.key_version,
+            algorithm: result.alg,
+            chunk_bytes: result.chunk_bytes,
+            nonce_mode: result.nonce_mode,
+            timestamp: Date.now(),
+            filename: filename,
+            job_id: jobRunID,
+            data_type: 'weather_data'
+          });
+        } catch (vaultWriteErr) {
+          console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping for ${result.cid}:`, vaultWriteErr.message);
+          // Optionally: delete the file from IPFS here if you want strict consistency
+          throw new Error('Vault write failed after IPFS upload. Data is on IPFS but not decryptable.');
+        }
         cid = result.cid;
-        console.log(`✅ Encrypted data uploaded to IPFS: ${cid}`);
+        console.log(`[${new Date().toISOString()}] ✅ Encrypted data uploaded to IPFS: ${cid}`);
       } else {
-        console.warn('⚠️ Vault unhealthy, falling back to plain IPFS upload');
+        console.warn(`[${new Date().toISOString()}] ⚠️ Vault unhealthy, falling back to plain IPFS upload`);
         cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
       }
     } else {
-      console.log('📁 Vault disabled, using plain IPFS upload');
+      console.log(`[${new Date().toISOString()}] 📁 Vault disabled, using plain IPFS upload`);
       cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
     }
   } catch (vaultError) {
-    console.error('❌ Vault encryption failed, falling back to plain IPFS:', vaultError.message);
-    cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
+    console.error(`[${new Date().toISOString()}] ❌ Vault encryption or write failed:`, vaultError.message);
+    // Do NOT fall back to plain IPFS upload if Vault write fails after encryption
+    return callback(500, {
+      jobRunID,
+      status: 'errored',
+      error: 'Vault encryption or metadata write failed. Data may be on IPFS but is not decryptable.',
+      statusCode: 500,
+    });
   }
 
   // Return only the CID in the response
+  console.log(`[${new Date().toISOString()}] [DEBUG] Calling callback with CID:`, cid, 'jobRunID:', jobRunID);
   callback(200, {
     jobRunID,
     cid: cid, // Return only the CID
@@ -185,16 +210,50 @@ const createRequest = async (input, callback, forecast = false) => {
   });
 };
 
-// Handle requests for current weather (Fetches from both if service is null)
-const handleWeatherRequest = (req, res) => {
-  console.log('POST Data: ', req.body);
-  createRequest(req.body, (status, result) => {
-    console.log('Weather Result: ', result);
-    res.status(status).json(result);
-  }, false); // Current weather request (not forecast)  
+// Robust async handler with timestamped logging
+const handleWeatherRequestWithLogging = async (req, res, log = console.log) => {
+  log(`[${new Date().toISOString()}] [Weather] POST Data:`, req.body);
+  try {
+    await createRequest(
+      req.body,
+      (status, result) => {
+        log(`[${new Date().toISOString()}] [Weather] Result:`, result);
+        res.status(status).json(result);
+      },
+      false
+    );
+  } catch (err) {
+    log(`[${new Date().toISOString()}] [Weather] Unhandled error:`, err.message);
+    res.status(500).json({ status: 'errored', error: 'Internal server error', statusCode: 500 });
+  }
 };
 
+module.exports.handleWeatherRequestWithLogging = handleWeatherRequestWithLogging;
 // Handle requests for weather forecasts (Fetches from both if service is null)
+const handleForecastRequestWithLogging = async (req, res, log = console.log) => {
+	try {
+		log('🌤️ Starting forecast request processing...');
+		
+		// Call the forecast handler with promise wrapper
+		await new Promise((resolve, reject) => {
+			createRequest(req.body, (status, result) => {
+				log('📊 Forecast Result:', result);
+				res.status(status).json(result);
+				resolve();
+			}, true); // forecast = true
+		});
+		
+		log('✅ Forecast request completed successfully');
+	} catch (error) {
+		log('❌ Error in forecast request:', error);
+		res.status(500).json({ 
+			status: 'errored', 
+			error: 'Internal server error', 
+			statusCode: 500 
+		});
+	}
+};
+
 const handleForecastRequest = (req, res) => {
   console.log('POST Data: ', req.body);
   createRequest(req.body, (status, result) => {
@@ -303,7 +362,7 @@ const decryptDataFromIpfs = async (cid, metadata) => {
 
 // Handle decryption requests
 const handleDecryptRequest = async (req, res) => {
-  console.log('Decrypt Request Data: ', req.body);
+  console.log(`[${new Date().toISOString()}] Decrypt Request Data: `, req.body);
   
   const { cid } = req.body;
   const jobRunID = uuidv4();
@@ -315,7 +374,7 @@ const handleDecryptRequest = async (req, res) => {
       return res.status(validation.error.statusCode).json(validation.error);
     }
 
-    console.log(`🔓 Decrypting data for CID: ${cid}`);
+    console.log(`[${new Date().toISOString()}] 🔓 Decrypting data for CID: ${cid}`);
     
     // Get CID mapping from Vault
     const metadata = await getCidMapping(cid);
@@ -345,30 +404,44 @@ const handleDecryptRequest = async (req, res) => {
       throw new Error(`Decrypted payload is not JSON: ${e.message}`);
     }
 
-    // Extract weather data (filter out QoE data)
-    const weatherData = decryptedData.filter(item => 
-      item.service && (item.service === 'openweather' || item.service === 'openmeteo')
-    );
+    // Extract weather data (handle both array format from current weather and object format from historical weather)
+    let weatherData;
     
-    console.log(`✅ Successfully decrypted data for CID: ${cid}`);
+    if (Array.isArray(decryptedData)) {
+      // Current weather format: array of service objects
+      weatherData = decryptedData.filter(item => 
+        item.service && (item.service === 'openweather' || item.service === 'openmeteo')
+      );
+    } else if (decryptedData && typeof decryptedData === 'object') {
+      // Historical weather format: raw response object from OpenMeteo
+      weatherData = { service: 'openmeteo', data: decryptedData };
+    } else {
+      throw new Error('Unexpected decrypted data format');
+    }
+    
+    console.log(`[${new Date().toISOString()}] ✅ Successfully decrypted data for CID: ${cid}`);
     
     res.status(200).json({
       jobRunID,
       cid,
-      data: weatherData.length === 1 ? weatherData[0].data : weatherData.map(item => ({ service: item.service, data: item.data })),
+      data: Array.isArray(weatherData) 
+        ? (weatherData.length === 1 ? weatherData[0].data : weatherData.map(item => ({ service: item.service, data: item.data })))
+        : weatherData.data,
       metadata: {
         timestamp: metadata.timestamp,
         filename: metadata.filename,
         job_id: metadata.job_id,
         data_type: metadata.data_type,
         algorithm: metadata.algorithm,
-        services: weatherData.map(item => item.service)
+        services: Array.isArray(weatherData) 
+          ? weatherData.map(item => item.service)
+          : [weatherData.service]
       },
       statusCode: 200,
     });
     
   } catch (error) {
-    console.error('❌ Decryption failed:', error.message);
+    console.error(`[${new Date().toISOString()}] ❌ Decryption failed:`, error.message);
     res.status(500).json({
       jobRunID,
       status: 'errored',
@@ -533,8 +606,9 @@ const handleHealthRequest = async (req, res) => {
 };
 
 module.exports = {
-  handleWeatherRequest,
+  handleWeatherRequestWithLogging,
   handleForecastRequest,
+  handleForecastRequestWithLogging,
   handleDecryptRequest,
   handleHealthRequest,
 };

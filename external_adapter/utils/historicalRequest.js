@@ -104,11 +104,17 @@ const createHistoricalRequest = async (input, callback) => {
           const ipfsUrl = process.env.IPFS_URL || 'http://127.0.0.1:5001';
           const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
           
-          const encryptionResult = await encryptStreamToIpfs(weatherDataStream, filename, ipfsApiUrl);
+          const encryptionResult = await encryptStreamToIpfs(weatherDataStream, ipfsApiUrl, 'weather-data');
           
           // Store CID mapping in Vault
           await storeCidMapping(encryptionResult.cid, {
-            ...encryptionResult.metadata,
+            wrapped_dek: encryptionResult.wrapped_dek,
+            key_version: encryptionResult.key_version,
+            algorithm: encryptionResult.alg,
+            chunk_bytes: encryptionResult.chunk_bytes,
+            nonce_mode: encryptionResult.nonce_mode,
+            timestamp: Date.now(),
+            filename: filename,
             job_id: jobRunID,
             data_type: 'historical_weather',
             service: service,

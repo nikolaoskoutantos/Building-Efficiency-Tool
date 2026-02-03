@@ -27,6 +27,16 @@ async function getIpfsClient() {
   }
 }
 
+// New: Precompute CID from buffer (async, using multiformats)
+async function precomputeCID(buffer) {
+  // Lazy-load multiformats to avoid extra deps if not used
+  const { CID } = await import('multiformats/cid');
+  const { sha256 } = await import('multiformats/hashes/sha2');
+  const hash = await sha256.digest(buffer);
+  // 0x55 = raw, or use appropriate codec for your data
+  return CID.createV1(0x55, hash).toString();
+}
+
 const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
   try {
     const client = await getIpfsClient();
@@ -116,4 +126,5 @@ const retrieveFromIPFS = async (cid) => {
 module.exports = {
   uploadToIPFS,
   retrieveFromIPFS,
+  precomputeCID, // New: export the precomputeCID function
 };

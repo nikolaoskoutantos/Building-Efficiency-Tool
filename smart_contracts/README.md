@@ -8,6 +8,10 @@ The smart contracts in this folder enable on-chain management of data, requests,
 
 > **Note:** Each contract returns a CID (Content Identifier) as a pointer to encrypted data stored on IPFS, rather than storing off-chain data directly on-chain. This approach avoids excessive on-chain costs and allows users to access the data they have purchased securely and efficiently.
 
+## Status
+
+> ⚠️ **Pending Update for Documentation** - Contract documentation and deployment guides are currently being updated to reflect recent changes in the external adapter integration and Vault encryption workflow.
+
 ## Contracts
 
 - `CostCIDRequest.sol`: Manages cost calculations and requests associated with CID operations, integrating with Chainlink for off-chain computation.
@@ -47,8 +51,8 @@ When deploying these contracts, you will typically need to provide several stand
 
 ### Example Standard Values (Base Sepolia Testnet)
 
-- Operator: `0xE4aB69C077896252FAFBD49EFD26B5D171A32410`
-- LINK Token: `0x514910771AF9Ca656af840dff83E8264EcF986CA` (Base Sepolia)
+- Operator: `0x359EC6760d0e46C3d8dBc23835679b9875eDcbCF`
+- LINK Token: `0xE4aB69C077896252FAFBD49EFD26B5D171A32410` (Base Sepolia)
 - Fee: `100000000000000000` (0.1 LINK)
 - Job ID (as bytes32): `0x123e4567e89b12d3a45642661417400000000000000000000000000000000000` (replace with your actual job ID, no hyphens, padded to 32 bytes)
 

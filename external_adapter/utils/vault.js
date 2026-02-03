@@ -34,8 +34,8 @@ class VaultService {
       };
       this.client = vault(vaultConfig);
       this.isInitialized = true;
-      console.log('✅ Vault client initialized');
-      console.log(`🔗 Vault endpoint: ${vaultConfig.endpoint}`);
+      console.log(`[${new Date().toISOString()}] ✅ Vault client initialized`);
+      console.log(`[${new Date().toISOString()}] 🔗 Vault endpoint: ${vaultConfig.endpoint}`);
     } catch (error) {
       console.error('❌ Failed to initialize Vault client:', error.message);
       this.isInitialized = false;
@@ -71,16 +71,16 @@ class VaultService {
   // 1) Get one-time DEK for local crypto
   async getDataKey(keyName = DEFAULT_TRANSIT_KEY) {
     try {
-      console.log(`🔑 Requesting DEK from Vault for key: ${keyName}`);
+      console.log(`[${new Date().toISOString()}] 🔑 Requesting DEK from Vault for key: ${keyName}`);
       const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/datakey/plaintext/${keyName}`, {});
-      console.log(`✅ DEK generated successfully`);
+      console.log(`[${new Date().toISOString()}] ✅ DEK generated successfully`);
       return {
         dek: Buffer.from(res.data.plaintext, 'base64'),
         wrappedDek: res.data.ciphertext,      // store next to CID
         keyVersion: res.data.key_version
       };
     } catch (error) {
-      console.error(`❌ DEK generation failed: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] ❌ DEK generation failed: ${error.message}`);
       throw error;
     }
   }
@@ -105,14 +105,25 @@ class VaultService {
 
   // ---------- KV (CID → wrapped_dek mapping) ----------
   async storeCidMapping(cid, mappingObj) {
+    console.log(`[${new Date().toISOString()}] [DEBUG] storeCidMapping called with cid:`, cid, 'mappingObj:', mappingObj);
     // KV v2 write: <mount>/data/<path>
     const path = `${DEFAULT_KV_MOUNT}/data/files/${cid}`;
-    return this.client.write(path, { data: mappingObj });
+    try {
+      console.log(`[${new Date().toISOString()}] [Vault] Writing CID mapping to: ${path}`);
+      const result = await this.client.write(path, { data: mappingObj });
+      console.log(`[${new Date().toISOString()}] [Vault] Successfully wrote CID mapping for ${cid}`);
+      return result;
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping for ${cid}:`, err.message);
+      // Optionally rethrow or handle error
+      throw err;
+    }
   }
 
   async getCidMapping(cid) {
     const path = `${DEFAULT_KV_MOUNT}/data/files/${cid}`;
     const res = await this.client.read(path);
+    console.log(`[${new Date().toISOString()}] [Vault] Read CID mapping for ${cid}:`, res.data.data);
     return res.data.data; // unwrap KV v2 payload
   }
 
@@ -211,15 +222,23 @@ class VaultService {
    * Returns: { cid, wrapped_dek, key_version, alg, chunk_bytes, nonce_mode }
    */
   async encryptStreamToIpfs(plaintextReadable, ipfsApiUrl, keyName = DEFAULT_TRANSIT_KEY, chunkBytes = DEFAULT_CHUNK_BYTES, mfsDir = 'encrypted_data') {
+    console.log(`[${new Date().toISOString()}] [DEBUG] === encryptStreamToIpfs called with updated code ===`);
     // 1) DEK from Vault (disposable)
     const { dek, wrappedDek, keyVersion } = await this.getDataKey(keyName);
 
     // 2) Encrypt streaming
     const cipherStream = this.encryptReadable(plaintextReadable, dek, chunkBytes);
 
-    // 3) Upload to IPFS
-    const uploadUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/add` : `${ipfsApiUrl}/api/v0/add`;
-    console.log(`📤 Uploading encrypted data to IPFS: ${uploadUrl}`);
+    // 3) Upload to IPFS - FIXED FOR FILEBASE
+    let uploadUrl;
+    if (ipfsApiUrl.includes('filebase.io')) {
+      // Filebase uses /add directly, not /api/v0/add
+      uploadUrl = ipfsApiUrl.includes('/add') ? ipfsApiUrl : `${ipfsApiUrl}/add`;
+    } else {
+      // Classic IPFS nodes use /api/v0/add
+      uploadUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/add` : `${ipfsApiUrl}/api/v0/add`;
+    }
+    console.log(`[${new Date().toISOString()}] 📤 Uploading encrypted data to IPFS: ${uploadUrl}`);
     const form = new FormData();
     form.append('file', cipherStream, { filename: 'cipher.bin' });
 
@@ -234,18 +253,40 @@ class VaultService {
         maxContentLength: Infinity,
       });
       
-      console.log(`✅ Encrypted data uploaded to IPFS with CID: ${res.data.Hash}`);
+      console.log(`[${new Date().toISOString()}] ✅ Encrypted data uploaded to IPFS with CID: ${res.data.Hash}`);
     } catch (ipfsError) {
-      console.error(`❌ IPFS upload failed: ${ipfsError.message}`);
+      console.error(`[${new Date().toISOString()}] ❌ IPFS upload failed: ${ipfsError.message}`);
       throw ipfsError;
     }
 
     const cid = res.data.Hash;
     
+    // FORCE IMMEDIATE RETURN - NO MFS OPERATIONS 
+    console.log(`[${new Date().toISOString()}] [DEBUG] FORCE RETURNING with CID: ${cid}`);
+    const result = {
+      cid,
+      wrapped_dek: wrappedDek,
+      key_version: keyVersion,
+      alg: 'AES-256-GCM',
+      chunk_bytes: chunkBytes,
+      nonce_mode: 'random'
+    };
+    console.log(`[${new Date().toISOString()}] [DEBUG] Result object:`, result);
+    return result;
+    
     // Add encrypted file to MFS for visibility in FILES section
     try {
       // First create the directory if it doesn't exist
-      const mkdirUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/mkdir` : `${ipfsApiUrl}/api/v0/files/mkdir`;
+      let mkdirUrl, cpUrl;
+      if (ipfsApiUrl.includes('filebase.io')) {
+        // Filebase uses /files/mkdir and /files/cp directly
+        mkdirUrl = `${ipfsApiUrl}/files/mkdir`;
+        cpUrl = `${ipfsApiUrl}/files/cp`;
+      } else {
+        // Classic IPFS nodes use /api/v0/files/
+        mkdirUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/mkdir` : `${ipfsApiUrl}/api/v0/files/mkdir`;
+        cpUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/cp` : `${ipfsApiUrl}/api/v0/files/cp`;
+      }
       await axios.post(`${mkdirUrl}?arg=/${mfsDir}&parents=true`, {}, {
         headers: {
           'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
@@ -253,15 +294,14 @@ class VaultService {
       });
       
       const mfsPath = `/${mfsDir}/${cid}.enc`;
-      const cpUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/files/cp` : `${ipfsApiUrl}/api/v0/files/cp`;
       await axios.post(`${cpUrl}?arg=/ipfs/${cid}&arg=${mfsPath}`, {}, {
         headers: {
           'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
         }
       });
-      console.log(`🔐📁 Added encrypted file to MFS: ${mfsPath}`);
+      console.log(`[${new Date().toISOString()}] 🔐📁 Added encrypted file to MFS: ${mfsPath}`);
     } catch (mfsError) {
-      console.log(`⚠️ MFS add error for encrypted file: ${mfsError.message}`);
+      console.log(`[${new Date().toISOString()}] ⚠️ MFS add error for encrypted file: ${mfsError.message}`);
     }
 
     // 4) Return metadata; DO NOT persist plaintext DEK
@@ -283,16 +323,16 @@ class VaultService {
     const { cid, wrapped_dek, chunk_bytes = DEFAULT_CHUNK_BYTES } = meta;
 
     try {
-      console.log(`🔓 Starting decryption for CID: ${cid}`);
+      console.log(`[${new Date().toISOString()}] 🔓 Starting decryption for CID: ${cid}`);
       
       // 1) Unwrap DEK via Vault
-      console.log(`🔑 Unwrapping DEK via Vault...`);
+      console.log(`[${new Date().toISOString()}] 🔑 Unwrapping DEK via Vault...`);
       const dek = await this.unwrapDek(wrapped_dek);
-      console.log(`✅ DEK unwrapped successfully`);
+      console.log(`[${new Date().toISOString()}] ✅ DEK unwrapped successfully`);
 
       // 2) Stream ciphertext from IPFS
       const catUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/cat` : `${ipfsApiUrl}/api/v0/cat`;
-      console.log(`📥 Fetching encrypted data from: ${catUrl}?arg=${cid}`);
+      console.log(`[${new Date().toISOString()}] 📥 Fetching encrypted data from: ${catUrl}?arg=${cid}`);
       
       const res = await axios.post(`${catUrl}?arg=${cid}`, {}, { 
         responseType: 'stream',
@@ -300,12 +340,12 @@ class VaultService {
           'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
         }
       });
-      console.log(`✅ IPFS response received, status: ${res.status}`);
+      console.log(`[${new Date().toISOString()}] ✅ IPFS response received, status: ${res.status}`);
 
       // 3) Decrypt streaming and pipe
-      console.log(`🔐 Starting stream decryption...`);
+      console.log(`[${new Date().toISOString()}] 🔐 Starting stream decryption...`);
       const plainStream = this.decryptReadable(res.data, dek, chunk_bytes);
-      console.log(`✅ Stream decryption initialized`);
+      console.log(`[${new Date().toISOString()}] ✅ Stream decryption initialized`);
       
       if (destWritable) {
         plainStream.pipe(destWritable);
@@ -316,8 +356,8 @@ class VaultService {
       }
       return plainStream; // caller can consume as Readable
     } catch (error) {
-      console.error(`❌ Decryption error in decryptFromIpfsToStream: ${error.message}`);
-      console.error(`❌ Error stack: ${error.stack}`);
+      console.error(`[${new Date().toISOString()}] ❌ Decryption error in decryptFromIpfsToStream: ${error.message}`);
+      console.error(`[${new Date().toISOString()}] ❌ Error stack: ${error.stack}`);
       throw error;
     }
   }

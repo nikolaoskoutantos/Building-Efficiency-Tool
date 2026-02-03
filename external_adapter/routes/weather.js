@@ -46,6 +46,20 @@ const { handleWeatherRequest } = require('../utils/index');
  *       500:
  *         description: Error fetching weather data
  */
-router.post('/', (req, res) => handleWeatherRequest(req, res));
+// Utility for timestamped logs
+function logWithTimestamp(...args) {
+	console.log(`[${new Date().toISOString()}]`, ...args);
+}
+
+router.post('/', async (req, res) => {
+	logWithTimestamp('POST /weather called with body:', req.body);
+	try {
+		// Call the async handler and await result
+		await require('../utils/index').handleWeatherRequestWithLogging(req, res, logWithTimestamp);
+	} catch (err) {
+		logWithTimestamp('❌ Unhandled error in /weather:', err.message);
+		res.status(500).json({ status: 'errored', error: 'Internal server error', statusCode: 500 });
+	}
+});
 
 module.exports = router;

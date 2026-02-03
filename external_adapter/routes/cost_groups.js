@@ -29,12 +29,29 @@ const { handleCostGroupRequest } = require('../utils/costGroupProcessor');
  *                   query_type:
  *                     type: string
  *                     description: Type of cost analysis to apply to the Proforma.xlsx file
- *                     enum: [filter, transform, search, extract, aggregate]                   product_type:
-                     type: string
-                     description: Product type to filter costs for
-                     enum: [product1, product2, product3, product4, product5, hvac_system, lighting_system, electrical_system, plumbing_system, building_envelope]                   query_params:
-                     type: object
-                     description: Cost grouping parameters specific to the query_type
+ *                     enum:
+ *                       - filter
+ *                       - transform
+ *                       - search
+ *                       - extract
+ *                       - aggregate
+ *                   product_type:
+ *                     type: string
+ *                     description: Product type to filter costs for
+ *                     enum:
+ *                       - product1
+ *                       - product2
+ *                       - product3
+ *                       - product4
+ *                       - product5
+ *                       - hvac_system
+ *                       - lighting_system
+ *                       - electrical_system
+ *                       - plumbing_system
+ *                       - building_envelope
+ *                   query_params:
+ *                     type: object
+ *                     description: Cost grouping parameters specific to the query_type
  *                     properties:
  *                       filters:
  *                         type: array
@@ -47,7 +64,15 @@ const { handleCostGroupRequest } = require('../utils/costGroupProcessor');
  *                               description: Cost field to filter on (e.g., category, amount, type)
  *                             operator:
  *                               type: string
- *                               enum: [eq, ne, gt, lt, gte, lte, contains, regex]
+ *                               enum:
+ *                                 - eq
+ *                                 - ne
+ *                                 - gt
+ *                                 - lt
+ *                                 - gte
+ *                                 - lte
+ *                                 - contains
+ *                                 - regex
  *                             value:
  *                               type: string
  *                       transforms:
@@ -58,7 +83,12 @@ const { handleCostGroupRequest } = require('../utils/costGroupProcessor');
  *                           properties:
  *                             operation:
  *                               type: string
- *                               enum: [select, rename, calculate, group, sort]
+ *                               enum:
+ *                                 - select
+ *                                 - rename
+ *                                 - calculate
+ *                                 - group
+ *                                 - sort
  *                             params:
  *                               type: object
  *                       search_terms:
@@ -79,11 +109,22 @@ const { handleCostGroupRequest } = require('../utils/costGroupProcessor');
  *                               type: string
  *                             operation:
  *                               type: string
- *                               enum: [sum, avg, count, min, max]
+ *                               enum:
+ *                                 - sum
+ *                                 - avg
+ *                                 - count
+ *                                 - min
+ *                                 - max
  *                   output_format:
  *                     type: string
  *                     description: Desired output format
-                     enum: [json, csv, excel, xlsx, xml, txt]
+ *                     enum:
+ *                       - json
+ *                       - csv
+ *                       - excel
+ *                       - xlsx
+ *                       - xml
+ *                       - txt
  *                     default: json
  *     responses:
  *       200:
