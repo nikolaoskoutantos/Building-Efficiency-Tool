@@ -1,9 +1,3 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
- 
-
--- Installs or updates the get_building_sensor_weather function for combined sensor and weather data
-
-
 CREATE OR REPLACE FUNCTION get_building_sensor_weather(
     in_building_id INTEGER,
     in_start_time TIMESTAMP,
@@ -51,23 +45,7 @@ BEGIN
         AND w.timestamp BETWEEN in_start_time AND in_end_time
     WHERE
         b.id = in_building_id
-        AND sd.timestamp BETWEEN in_start_time AND in_end_time;
+        AND sd.timestamp BETWEEN in_start_time AND in_end_time
+    ORDER BY sd.timestamp ASC, sd.sensor_id ASC;
 END;
 $$ LANGUAGE plpgsql;
--- Update encrypt_wallet function to be deterministic using HMAC
-CREATE OR REPLACE FUNCTION encrypt_wallet(wallet_address TEXT, encryption_key TEXT)
-RETURNS TEXT AS $$
-BEGIN
-    -- Use HMAC for deterministic encryption (same input always produces same output)
-    -- This allows upsert functionality while still providing security
-    RETURN encode(hmac(wallet_address::bytea, encryption_key::bytea, 'sha256'), 'base64');
-END;
-$$ LANGUAGE plpgsql;
-
-
--- WITH test_values AS (
---     SELECT 'test_wallet' AS wallet, 'test_key' AS key
--- )
--- SELECT encrypt_wallet(wallet, key) as test1 FROM test_values;
--- SELECT encrypt_wallet(wallet, key) as test2 FROM test_values;
--- SELECT encrypt_wallet(wallet, key) as test3 FROM test_values;

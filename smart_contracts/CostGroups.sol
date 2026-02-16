@@ -175,7 +175,7 @@ contract CostsCIDRequester is ChainlinkClient, Ownable, Pausable, ReentrancyGuar
 
     function setProduct(
         uint32 productId,
-        string calldata query,
+        string calldata query,  
         bool active
     ) external onlyOwner {
         require(productId != 0, "productId=0");

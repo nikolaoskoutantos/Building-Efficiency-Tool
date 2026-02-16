@@ -33,13 +33,180 @@ def insert_mock_data():
     db = SessionLocal()
     try:
         print("🔄 Checking and initializing mock data...")
-        
-        # Add initial services data if not already present
-        if not db.query(Service).first():
-            print("📝 Initializing services data...")
-            insert_services_from_sql()
+
+        # Skipping services data insertion
+        print("⏩ Skipping services data insertion.")
+
+        # Add a pilot building and three sensors if not already present
+        from models.hvac_models import Building
+        from models.sensor import Sensor
+
+        if not db.query(Building).filter_by(name="Pilot1").first():
+            pilot_building = Building(
+                did="0xA",
+                name="Pilot1",
+                address="Athens, Greece",
+                lat="37.99",
+                lon="23.73"
+            )
+            db.add(pilot_building)
+            db.commit()
+            db.refresh(pilot_building)
+            print("🏢 Added building: Pilot1")
         else:
-            print("✅ Services data already exists")
+            pilot_building = db.query(Building).filter_by(name="Pilot1").first()
+            print("🏢 Building Pilot1 already exists")
+
+        sensors_to_add = [
+            {
+                "type": "temperature",
+                "rate_of_sampling": 5.0,
+                "unit": "Celsius",
+                "lat": 37.99378878796816,
+                "lon": 23.732937037886362,
+                "room": "101",
+                "zone": "A",
+                "central_unit": "CU1"
+            },
+            {
+                "type": "presence",
+                "rate_of_sampling": 5.0,
+                "unit": "bool",
+                "lat": 37.99378878796816,
+                "lon": 23.732937037886362,
+                "room": "101",
+                "zone": "A",
+                "central_unit": "CU1"
+            },
+            {
+                "type": "energy",
+                "rate_of_sampling": 5.0,
+                "unit": "kWh",
+                "lat": 37.99378878796816,
+                "lon": 23.732937037886362,
+                "room": "101",
+                "zone": "A",
+                "central_unit": "CU1"
+            },
+        ]
+
+        for sensor_data in sensors_to_add:
+            exists = db.query(Sensor).filter_by(
+                type=sensor_data["type"],
+                lat=sensor_data["lat"],
+                lon=sensor_data["lon"],
+                unit=sensor_data["unit"],
+                room=sensor_data["room"],
+                zone=sensor_data["zone"],
+                central_unit=sensor_data["central_unit"]
+            ).first()
+            if not exists:
+                sensor = Sensor(
+                    building_id=pilot_building.id,
+                    hvac_id=None,
+                    type=sensor_data["type"],
+                    lat=sensor_data["lat"],
+                    lon=sensor_data["lon"],
+                    rate_of_sampling=sensor_data["rate_of_sampling"],
+                    raw_data_id=0,
+                    unit=sensor_data["unit"],
+                    room=sensor_data["room"],
+                    zone=sensor_data["zone"],
+                    central_unit=sensor_data["central_unit"]
+                )
+                db.add(sensor)
+                print(f"🌡️ Added sensor: {sensor_data['type']} ({sensor_data['unit']}) in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
+            else:
+                print(f"🌡️ Sensor {sensor_data['type']} already exists in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
+        db.commit()
+
+        # Add mock sensor_data for each sensor (2-3 hours, 5-min intervals)
+        from models.sensordata import SensorData
+        import datetime
+        sensors = db.query(Sensor).filter(Sensor.building_id == pilot_building.id).all()
+        now = datetime.datetime.now()
+        for sensor in sensors:
+            # 2 hours of data, 5-min intervals = 24 points
+            for i in range(24):
+                timestamp = now - datetime.timedelta(minutes=5 * (24 - i))
+                if sensor.type == "temperature":
+                    value = round(20 + 5 * (i % 3) + (i % 2), 2)  # Simulate temp
+                    measurement_type = "temperature"
+                    unit = "celsius"
+                elif sensor.type == "presence":
+                    value = int(i % 2 == 0)  # Simulate presence
+                    measurement_type = "presence"
+                    unit = "bool"
+                elif sensor.type == "energy":
+                    value = round(0.5 + 0.1 * (i % 5), 2)  # Simulate kWh
+                    measurement_type = "energy"
+                    unit = "kWh"
+                else:
+                    value = 0
+                    measurement_type = "unknown"
+                    unit = "unknown"
+                sensor_data = SensorData(
+                    sensor_id=sensor.id,
+                    timestamp=timestamp,
+                    value=value,
+                    measurement_type=measurement_type,
+                    unit=unit
+                )
+                db.add(sensor_data)
+            print(f"📈 Added mock sensor_data for sensor {sensor.type}")
+        db.commit()
+        sensors_to_add = [
+            {
+                "type": "presence",
+                "rate_of_sampling": 5.0,
+                "unit": "bool",
+                "lat": 37.99378878796816,
+                "lon": 23.732937037886362,
+                "room": "101",
+                "zone": "A",
+                "central_unit": "CU1"
+            },
+            {
+                "type": "energy",
+                "rate_of_sampling": 5.0,
+                "unit": "kWh",
+                "lat": 37.99378878796816,
+                "lon": 23.732937037886362,
+                "room": "101",
+                "zone": "A",
+                "central_unit": "CU1"
+            },
+        ]
+
+        for sensor_data in sensors_to_add:
+            exists = db.query(Sensor).filter_by(
+                type=sensor_data["type"],
+                lat=sensor_data["lat"],
+                lon=sensor_data["lon"],
+                unit=sensor_data["unit"],
+                room=sensor_data["room"],
+                zone=sensor_data["zone"],
+                central_unit=sensor_data["central_unit"]
+            ).first()
+            if not exists:
+                sensor = Sensor(
+                    building_id=pilot_building.id,
+                    hvac_id=None,
+                    type=sensor_data["type"],
+                    lat=sensor_data["lat"],
+                    lon=sensor_data["lon"],
+                    rate_of_sampling=sensor_data["rate_of_sampling"],
+                    raw_data_id=0,
+                    unit=sensor_data["unit"],
+                    room=sensor_data["room"],
+                    zone=sensor_data["zone"],
+                    central_unit=sensor_data["central_unit"]
+                )
+                db.add(sensor)
+                print(f"🌡️ Added sensor: {sensor_data['type']} ({sensor_data['unit']}) in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
+            else:
+                print(f"🌡️ Sensor {sensor_data['type']} already exists in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
+        db.commit()
             
         # Add initial knowledge data if not already present
         if not db.query(Knowledge).first():
@@ -191,6 +358,10 @@ if __name__ == "__main__":
     # Can be run directly to insert mock data
     print("🚀 Starting mock data insertion...")
     insert_mock_data()
-    
+
     # Optionally insert sample ratings
     insert_sample_ratings()
+
+    # Install or update the get_building_sensor_weather stored procedure
+    print("⚙️ Installing get_building_sensor_weather stored procedure...")
+    execute_sql_file("get_building_sensor_weather.sql")

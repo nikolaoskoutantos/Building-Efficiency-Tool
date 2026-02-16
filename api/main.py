@@ -60,6 +60,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from controllers.building_sensor_weather import router as building_sensor_weather_router
+
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(service_router)
@@ -69,3 +71,4 @@ app.include_router(weather_router)
 app.include_router(sensordata_router)
 app.include_router(smartcontract_router)
 app.include_router(predict_router)
+app.include_router(building_sensor_weather_router)

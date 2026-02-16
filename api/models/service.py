@@ -13,3 +13,5 @@ class Service(Base):
     input_parameters = Column(JSON, nullable=True)
     knowledge_asset = Column(JSON, nullable=True)
     is_active = Column(Integer, nullable=True, default=1)  # 1 for active, 0 for inactive
+    created_at = Column(String, nullable=True)
+    updated_at = Column(String, nullable=True)

@@ -13,3 +13,6 @@ class Sensor(Base):
     rate_of_sampling = Column(Float, nullable=False)
     raw_data_id = Column(Integer, nullable=False)
     unit = Column(String, nullable=False)
+    room = Column(String, nullable=True)  # Room name or number
+    zone = Column(String, nullable=True)  # Zone identifier
+    central_unit = Column(String, nullable=True)  # Central unit association
