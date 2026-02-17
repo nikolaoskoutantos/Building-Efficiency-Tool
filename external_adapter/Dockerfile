@@ -1,4 +1,4 @@
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Create app directory and set permissions
 RUN mkdir -p /home/node/app/node_modules && chown -R node:node /home/node/app
