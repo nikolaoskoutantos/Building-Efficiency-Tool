@@ -55,6 +55,7 @@ console.log('Libp2p addrs:', orbitdb.ipfs.libp2p.getMultiaddrs())
 // -------------------- HTTP gateway --------------------
 
 const app = express()
+app.disable("x-powered-by");
 app.use(express.json({ limit: '5mb' }))
 
   // Swagger/OpenAPI setup (external YAML)
