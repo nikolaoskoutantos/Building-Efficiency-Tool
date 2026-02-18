@@ -4,4 +4,5 @@ COPY package.json ./
 COPY swagger.yaml ./
 RUN npm install --omit=dev
 COPY start.js ./
+USER node
 CMD ["node", "start.js"]

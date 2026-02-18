@@ -13,18 +13,18 @@ import { gossipsub } from '@chainsafe/libp2p-gossipsub'
 import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
 
+// Use top-level await instead of async IIFE
 
-(async () => {
-  const TCP_PORT  = Number(process.env.HELIA_TCP_PORT || 4101)
-  const WS_PORT   = Number(process.env.HELIA_WS_PORT  || 4102)
-  const DB_NAME   = process.env.ORBIT_DB_NAME || 'qoe-log'
-  const HTTP_PORT = Number(process.env.ORBIT_HTTP_PORT || 3110)
+const TCP_PORT  = Number(process.env.HELIA_TCP_PORT || 4101)
+const WS_PORT   = Number(process.env.HELIA_WS_PORT  || 4102)
+const DB_NAME   = process.env.ORBIT_DB_NAME || 'qoe-log'
+const HTTP_PORT = Number(process.env.ORBIT_HTTP_PORT || 3110)
 
-  // Persistent storage
-  const blockstore = new LevelBlockstore('/data/orbitdb/ipfs/blocks')
-  await blockstore.open()
+// Persistent storage
+const blockstore = new LevelBlockstore('/data/orbitdb/ipfs/blocks')
+await blockstore.open()
 
-  const libp2p = await createLibp2p({
+const libp2p = await createLibp2p({
     peerDiscovery: [mdns()],
     addresses: {
       listen: [
@@ -41,21 +41,21 @@ import { yamux } from '@chainsafe/libp2p-yamux'
     }
   })
 
-  const ipfs = await createHelia({ libp2p, blockstore })
-  const orbitdb = await createOrbitDB({ ipfs })
+const ipfs = await createHelia({ libp2p, blockstore })
+const orbitdb = await createOrbitDB({ ipfs })
 
-  // Use a documents DB so we can do structured queries
-  // Each record must have an `_id` field (our composite key).
-  const db = await orbitdb.open(DB_NAME, { type: 'documents', indexBy: '_id' })
+// Use a documents DB so we can do structured queries
+// Each record must have an `_id` field (our composite key).
+const db = await orbitdb.open(DB_NAME, { type: 'documents', indexBy: '_id' })
 
-  console.log('OrbitDB running')
-  console.log('DB address:', db.address)
-  console.log('Libp2p addrs:', orbitdb.ipfs.libp2p.getMultiaddrs())
+console.log('OrbitDB running')
+console.log('DB address:', db.address)
+console.log('Libp2p addrs:', orbitdb.ipfs.libp2p.getMultiaddrs())
 
-  // -------------------- HTTP gateway --------------------
+// -------------------- HTTP gateway --------------------
 
-  const app = express()
-  app.use(express.json({ limit: '5mb' }))
+const app = express()
+app.use(express.json({ limit: '5mb' }))
 
   // Swagger/OpenAPI setup (external YAML)
   const swaggerSpec = yaml.load('./swagger.yaml')
@@ -137,7 +137,11 @@ import { yamux } from '@chainsafe/libp2p-yamux'
       })
 
       // sort ascending by start
-      items.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
+      items.sort((a, b) => {
+        if (a.start < b.start) return -1;
+        if (a.start > b.start) return 1;
+        return 0;
+      })
 
       res.json({ ok: true, count: items.length, items })
     } catch (e) {
@@ -156,8 +160,7 @@ import { yamux } from '@chainsafe/libp2p-yamux'
     }
   })
 
-  app.listen(HTTP_PORT, '0.0.0.0', () => {
-    console.log(`OrbitDB HTTP gateway listening on :${HTTP_PORT}`)
-  })
-  process.stdin.resume()
-})();
+app.listen(HTTP_PORT, '0.0.0.0', () => {
+  console.log(`OrbitDB HTTP gateway listening on :${HTTP_PORT}`)
+})
+process.stdin.resume()

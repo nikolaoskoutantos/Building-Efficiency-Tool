@@ -17,7 +17,7 @@ class Predictor(Base):
     model_type = Column(String, nullable=True)  # 'linear_regression', 'random_forest', 'hvac_optimizer'
     model_data = Column(JSON, nullable=True)  # Serialized model parameters
     training_data_hash = Column(String, nullable=True)  # Hash of training data for version control
-    hvac_schedule_id = Column(Integer, ForeignKey("hvac_schedules.id"), nullable=True)  # Link to schedule
+    # hvac_schedule_id field removed (was ForeignKey to hvac_schedules.id)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

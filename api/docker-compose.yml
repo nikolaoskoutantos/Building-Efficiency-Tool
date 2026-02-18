@@ -35,6 +35,6 @@ services:
       - "5444:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/update_function.sql:/docker-entrypoint-initdb.d/update_function.sql
+     # - ./db/update_function.sql:/docker-entrypoint-initdb.d/update_function.sql
 volumes:
   pgdata:

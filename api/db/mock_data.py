@@ -1,367 +1,240 @@
-"""
-Mock data initialization for PostgreSQL database.
-Updated to work with the new db structure and PostgreSQL.
-"""
+import datetime
+from sqlalchemy import and_
+from db.connection import SessionLocal
 
-
-import os
-import psycopg2
-from sqlalchemy.orm import Session
-from .connection import SessionLocal, engine  # Updated import
-from models.knowledge import Knowledge
-from models.predictor import Predictor
-from models.service import Service
-from models.rate import Rate
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
-
-def get_db_url():
-    """Get the database URL from environment or raise if not set."""
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        raise RuntimeError(
-            "DATABASE_URL environment variable is not set. Please define it in your .env file as DATABASE_URL=postgresql://user:password@host:port/dbname"
-        )
-    return db_url
+def utc_naive(dt: datetime.datetime) -> datetime.datetime:
+    return dt.replace(tzinfo=None)
 
 def insert_mock_data():
-    """
-    Main function to insert all mock data into PostgreSQL database.
-    """
     db = SessionLocal()
     try:
+        from models.hvac_models import Building, User, UserBuilding, HVACScheduleInterval
+        from models.hvac_unit import HVACUnit
+        from models.sensor import Sensor
+        from models.sensordata import WeatherData, SensorData
+
         print("🔄 Checking and initializing mock data...")
 
-        # Skipping services data insertion
-        print("⏩ Skipping services data insertion.")
-
-        # Add a pilot building and three sensors if not already present
-        from models.hvac_models import Building
-        from models.sensor import Sensor
-
-        if not db.query(Building).filter_by(name="Pilot1").first():
+        # 1) Building
+        pilot_building = db.query(Building).filter_by(name="Pilot1").first()
+        if not pilot_building:
             pilot_building = Building(
                 did="0xA",
                 name="Pilot1",
                 address="Athens, Greece",
                 lat="37.99",
-                lon="23.73"
+                lon="23.73",
             )
             db.add(pilot_building)
             db.commit()
             db.refresh(pilot_building)
             print("🏢 Added building: Pilot1")
         else:
-            pilot_building = db.query(Building).filter_by(name="Pilot1").first()
             print("🏢 Building Pilot1 already exists")
 
-        sensors_to_add = [
-            {
-                "type": "temperature",
-                "rate_of_sampling": 5.0,
-                "unit": "Celsius",
-                "lat": 37.99378878796816,
-                "lon": 23.732937037886362,
-                "room": "101",
-                "zone": "A",
-                "central_unit": "CU1"
-            },
-            {
-                "type": "presence",
-                "rate_of_sampling": 5.0,
-                "unit": "bool",
-                "lat": 37.99378878796816,
-                "lon": 23.732937037886362,
-                "room": "101",
-                "zone": "A",
-                "central_unit": "CU1"
-            },
-            {
-                "type": "energy",
-                "rate_of_sampling": 5.0,
-                "unit": "kWh",
-                "lat": 37.99378878796816,
-                "lon": 23.732937037886362,
-                "room": "101",
-                "zone": "A",
-                "central_unit": "CU1"
-            },
-        ]
+        # 2) User
+        user_wallet = "0xUSERWALLET1234567890"
+        user = db.query(User).filter_by(wallet_address=user_wallet).first()
+        if not user:
+            user = User(wallet_address=user_wallet)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            print(f"👤 Added user: {user_wallet}")
 
-        for sensor_data in sensors_to_add:
-            exists = db.query(Sensor).filter_by(
-                type=sensor_data["type"],
-                lat=sensor_data["lat"],
-                lon=sensor_data["lon"],
-                unit=sensor_data["unit"],
-                room=sensor_data["room"],
-                zone=sensor_data["zone"],
-                central_unit=sensor_data["central_unit"]
-            ).first()
-            if not exists:
-                sensor = Sensor(
-                    building_id=pilot_building.id,
-                    hvac_id=None,
-                    type=sensor_data["type"],
-                    lat=sensor_data["lat"],
-                    lon=sensor_data["lon"],
-                    rate_of_sampling=sensor_data["rate_of_sampling"],
-                    raw_data_id=0,
-                    unit=sensor_data["unit"],
-                    room=sensor_data["room"],
-                    zone=sensor_data["zone"],
-                    central_unit=sensor_data["central_unit"]
-                )
-                db.add(sensor)
-                print(f"🌡️ Added sensor: {sensor_data['type']} ({sensor_data['unit']}) in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
-            else:
-                print(f"🌡️ Sensor {sensor_data['type']} already exists in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
-        db.commit()
+        # 3) User ↔ Building mapping
+        ub = db.query(UserBuilding).filter_by(user_id=user.id, building_id=pilot_building.id).first()
+        if not ub:
+            ub = UserBuilding(
+                user_id=user.id,
+                building_id=pilot_building.id,
+                role="building_manager",
+                status="active",
+            )
+            db.add(ub)
+            db.commit()
+            print("🔗 Mapped user to building")
 
-        # Add mock sensor_data for each sensor (2-3 hours, 5-min intervals)
-        from models.sensordata import SensorData
-        import datetime
-        sensors = db.query(Sensor).filter(Sensor.building_id == pilot_building.id).all()
-        now = datetime.datetime.now()
-        for sensor in sensors:
-            # 2 hours of data, 5-min intervals = 24 points
-            for i in range(24):
-                timestamp = now - datetime.timedelta(minutes=5 * (24 - i))
-                if sensor.type == "temperature":
-                    value = round(20 + 5 * (i % 3) + (i % 2), 2)  # Simulate temp
-                    measurement_type = "temperature"
-                    unit = "celsius"
-                elif sensor.type == "presence":
-                    value = int(i % 2 == 0)  # Simulate presence
-                    measurement_type = "presence"
-                    unit = "bool"
-                elif sensor.type == "energy":
-                    value = round(0.5 + 0.1 * (i % 5), 2)  # Simulate kWh
-                    measurement_type = "energy"
-                    unit = "kWh"
-                else:
-                    value = 0
-                    measurement_type = "unknown"
-                    unit = "unknown"
-                sensor_data = SensorData(
-                    sensor_id=sensor.id,
-                    timestamp=timestamp,
-                    value=value,
-                    measurement_type=measurement_type,
-                    unit=unit
-                )
-                db.add(sensor_data)
-            print(f"📈 Added mock sensor_data for sensor {sensor.type}")
-        db.commit()
-        sensors_to_add = [
-            {
-                "type": "presence",
-                "rate_of_sampling": 5.0,
-                "unit": "bool",
-                "lat": 37.99378878796816,
-                "lon": 23.732937037886362,
-                "room": "101",
-                "zone": "A",
-                "central_unit": "CU1"
-            },
-            {
-                "type": "energy",
-                "rate_of_sampling": 5.0,
-                "unit": "kWh",
-                "lat": 37.99378878796816,
-                "lon": 23.732937037886362,
-                "room": "101",
-                "zone": "A",
-                "central_unit": "CU1"
-            },
-        ]
+        # 4) Create ONE HVAC unit for this building (new table)
+        hvac_unit = db.query(HVACUnit).filter_by(
+            building_id=pilot_building.id,
+            room="101",
+            zone="A",
+            central_unit="CU1",
+        ).first()
 
-        for sensor_data in sensors_to_add:
-            exists = db.query(Sensor).filter_by(
-                type=sensor_data["type"],
-                lat=sensor_data["lat"],
-                lon=sensor_data["lon"],
-                unit=sensor_data["unit"],
-                room=sensor_data["room"],
-                zone=sensor_data["zone"],
-                central_unit=sensor_data["central_unit"]
-            ).first()
-            if not exists:
-                sensor = Sensor(
-                    building_id=pilot_building.id,
-                    hvac_id=None,
-                    type=sensor_data["type"],
-                    lat=sensor_data["lat"],
-                    lon=sensor_data["lon"],
-                    rate_of_sampling=sensor_data["rate_of_sampling"],
-                    raw_data_id=0,
-                    unit=sensor_data["unit"],
-                    room=sensor_data["room"],
-                    zone=sensor_data["zone"],
-                    central_unit=sensor_data["central_unit"]
-                )
-                db.add(sensor)
-                print(f"🌡️ Added sensor: {sensor_data['type']} ({sensor_data['unit']}) in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
-            else:
-                print(f"🌡️ Sensor {sensor_data['type']} already exists in room {sensor_data['room']}, zone {sensor_data['zone']}, central unit {sensor_data['central_unit']}")
-        db.commit()
-            
-        # Add initial knowledge data if not already present
-        if not db.query(Knowledge).first():
-            print("📝 Initializing knowledge data...")
-            insert_knowledge_from_sql()
+        if not hvac_unit:
+            hvac_unit = HVACUnit(
+                building_id=pilot_building.id,
+                room="101",
+                zone="A",
+                central_unit="CU1",
+            )
+            db.add(hvac_unit)
+            db.commit()
+            db.refresh(hvac_unit)
+            print(f"❄️ Created HVAC unit id={hvac_unit.id}")
         else:
-            print("✅ Knowledge data already exists")
-            
-        # Add initial predictor data if not already present  
-        if not db.query(Predictor).first():
-            print("📝 Initializing predictor data...")
-            insert_predictor_from_sql()
-        else:
-            print("✅ Predictor data already exists")
-            
-        print("✅ Mock data initialization completed!")
-        
+            print(f"❄️ HVAC unit already exists id={hvac_unit.id}")
+
+        # 5) Create sensors attached to HVAC unit (hvac_unit_id)
+        def get_or_create_sensor(sensor_type: str, unit: str):
+            s = db.query(Sensor).filter_by(
+                building_id=pilot_building.id,
+                hvac_unit_id=hvac_unit.id,
+                type=sensor_type,
+                room="101",
+                zone="A",
+                central_unit="CU1",
+            ).first()
+            if not s:
+                s = Sensor(
+                    building_id=pilot_building.id,
+                    hvac_unit_id=hvac_unit.id,
+                    type=sensor_type,
+                    lat=float(pilot_building.lat),
+                    lon=float(pilot_building.lon),
+                    rate_of_sampling=5.0,
+                    raw_data_id=0,
+                    unit=unit,
+                    room="101",
+                    zone="A",
+                    central_unit="CU1",
+                )
+                db.add(s)
+                db.commit()
+                db.refresh(s)
+                print(f"📟 Created sensor {sensor_type} id={s.id}")
+            return s
+
+        temp_s = get_or_create_sensor("temperature", "celsius")
+        pres_s = get_or_create_sensor("presence", "bool")
+        enrg_s = get_or_create_sensor("energy", "kWh")
+
+        # 6) Time grid
+        days = 3
+        step_min = 5
+        now_utc = datetime.datetime.utcnow()
+        start = utc_naive(datetime.datetime(now_utc.year, now_utc.month, now_utc.day, 0, 0, 0))
+        end = start + datetime.timedelta(days=days)
+
+        time_steps = []
+        ts = start
+        while ts < end:
+            time_steps.append(ts)
+            ts += datetime.timedelta(minutes=step_min)
+
+        # 7) Clean existing data in range
+        db.query(WeatherData).filter(
+            and_(
+                WeatherData.lat == float(pilot_building.lat),
+                WeatherData.lon == float(pilot_building.lon),
+                WeatherData.timestamp >= start,
+                WeatherData.timestamp < end,
+            )
+        ).delete(synchronize_session=False)
+
+        db.query(SensorData).filter(
+            and_(
+                SensorData.sensor_id.in_([temp_s.id, pres_s.id, enrg_s.id]),
+                SensorData.timestamp >= start,
+                SensorData.timestamp < end,
+            )
+        ).delete(synchronize_session=False)
+
+        # NOTE: renamed hvac_id -> hvac_unit_id
+        db.query(HVACScheduleInterval).filter(
+            and_(
+                HVACScheduleInterval.building_id == pilot_building.id,
+                HVACScheduleInterval.hvac_unit_id == hvac_unit.id,
+                HVACScheduleInterval.start_ts >= start,
+                HVACScheduleInterval.start_ts < end,
+            )
+        ).delete(synchronize_session=False)
+
+        db.commit()
+        print("🧹 Cleared old weather/sensor/schedule data for the range")
+
+        # 8) Insert aligned data (bulk)
+        weather_rows = []
+        schedule_rows = []
+        sensor_rows = []
+
+        for i, t in enumerate(time_steps):
+            weather_rows.append(
+                WeatherData(
+                    timestamp=t,
+                    lat=float(pilot_building.lat),
+                    lon=float(pilot_building.lon),
+                    temperature=22.0 + (i % 3),
+                    humidity=50.0 + (i % 5),
+                    pressure=1010.0 + (i % 2),
+                    wind_speed=3.0 + (i % 2),
+                    wind_direction=180.0,
+                    precipitation=0.0,
+                    weather_description="clear sky",
+                )
+            )
+
+            sched_start = t
+            sched_end = t + datetime.timedelta(minutes=step_min)
+            is_on = True if (i % 12) < 10 else False
+            setpoint = 21.0 if is_on else None
+
+            schedule_rows.append(
+                HVACScheduleInterval(
+                    building_id=pilot_building.id,
+                    hvac_unit_id=hvac_unit.id,
+                    start_ts=sched_start,
+                    end_ts=sched_end,
+                    is_on=is_on,
+                    setpoint=setpoint,
+                    created_by_user_id=user.id,
+                )
+            )
+
+            sensor_rows.append(
+                SensorData(
+                    sensor_id=temp_s.id,
+                    timestamp=t,
+                    value=20.0 + (i % 4),
+                    measurement_type="temperature",
+                    unit="celsius",
+                )
+            )
+            sensor_rows.append(
+                SensorData(
+                    sensor_id=pres_s.id,
+                    timestamp=t,
+                    value=1.0 if (i % 2 == 0) else 0.0,
+                    measurement_type="presence",
+                    unit="bool",
+                )
+            )
+            sensor_rows.append(
+                SensorData(
+                    sensor_id=enrg_s.id,
+                    timestamp=t,
+                    value=0.5 + 0.1 * (i % 5),
+                    measurement_type="energy",
+                    unit="kWh",
+                )
+            )
+
+        db.bulk_save_objects(weather_rows)
+        db.bulk_save_objects(schedule_rows)
+        db.bulk_save_objects(sensor_rows)
+        db.commit()
+
+        print(
+            f"✅ Inserted mock data: {len(time_steps)} timesteps, "
+            f"{len(weather_rows)} weather rows, {len(schedule_rows)} schedule rows, "
+            f"{len(sensor_rows)} sensor rows"
+        )
+
     except Exception as e:
+        db.rollback()
         print(f"❌ Error during mock data initialization: {str(e)}")
+        raise
     finally:
         db.close()
-
-def execute_sql_file(sql_file_name: str):
-    """
-    Execute a SQL file against the PostgreSQL database.
-    """
-    try:
-        # Get the path to the SQL file in the mock_data folder
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        sql_file_path = os.path.join(current_dir, 'mock_data', sql_file_name)
-        
-        if not os.path.exists(sql_file_path):
-            print(f"❌ SQL file not found at: {sql_file_path}")
-            return False
-            
-        # Parse database URL
-        db_url = get_db_url()
-        
-        # Connect to PostgreSQL and execute SQL
-        conn = psycopg2.connect(db_url)
-        cursor = conn.cursor()
-        
-        try:
-            with open(sql_file_path, 'r', encoding='utf-8') as sql_file:
-                sql_script = sql_file.read()
-                
-                # Split the script into individual statements
-                statements = [stmt.strip() for stmt in sql_script.split(';') if stmt.strip()]
-                
-                for statement in statements:
-                    if statement:
-                        cursor.execute(statement)
-                
-            conn.commit()
-            print(f"✅ Successfully executed {sql_file_name}")
-            return True
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ Error executing SQL file {sql_file_name}: {str(e)}")
-            return False
-            
-        finally:
-            cursor.close()
-            conn.close()
-            
-    except Exception as e:
-        print(f"❌ Database connection error for {sql_file_name}: {str(e)}")
-        return False
-
-def insert_services_from_sql():
-    """Execute the services_data.sql file to populate initial services."""
-    return execute_sql_file('services_data.sql')
-
-def insert_knowledge_from_sql():
-    """Execute the knowledge_data.sql file to populate initial knowledge assets."""
-    return execute_sql_file('knowledge_data.sql')
-
-def insert_predictor_from_sql():
-    """Execute the predictor_data.sql file to populate initial predictor models."""
-    return execute_sql_file('predictor_data.sql')
-
-def insert_sample_ratings():
-    """
-    Insert sample encrypted ratings for testing.
-    """
-    try:
-        from db.functions import submit_rating
-        
-        db = SessionLocal()
-        
-        # Sample ratings data
-        sample_ratings = [
-            {"service_id": 1, "wallet": "0x1234567890abcdef1234567890abcdef12345678", "rating": 4.5, "feedback": "Great service!"},
-            {"service_id": 1, "wallet": "0xabcdef1234567890abcdef1234567890abcdef12", "rating": 3.8, "feedback": "Good but could be faster"},
-            {"service_id": 2, "wallet": "0x9876543210fedcba9876543210fedcba98765432", "rating": 5.0, "feedback": "Excellent accuracy"},
-            {"service_id": 2, "wallet": "0x1111222233334444555566667777888899990000", "rating": 4.2, "feedback": "Very reliable"},
-            {"service_id": 3, "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "rating": 3.5, "feedback": "Average performance"},
-        ]
-        
-        for rating_data in sample_ratings:
-            try:
-                submit_rating(
-                    db=db,
-                    service_id=rating_data["service_id"],
-                    wallet_address=rating_data["wallet"],
-                    rating=rating_data["rating"],
-                    feedback=rating_data["feedback"]
-                )
-            except Exception as e:
-                print(f"⚠️  Could not insert sample rating: {str(e)}")
-                
-        db.commit()
-        print("✅ Sample ratings inserted successfully")
-        
-    except Exception as e:
-        print(f"❌ Error inserting sample ratings: {str(e)}")
-    finally:
-        if 'db' in locals():
-            db.close()
-
-def clear_all_data():
-    """
-    Clear all data from tables (useful for testing).
-    """
-    try:
-        db_url = get_db_url()
-        conn = psycopg2.connect(db_url)
-        cursor = conn.cursor()
-        
-        # Clear tables in correct order (respecting foreign keys)
-        tables = ['rates', 'predictors', 'knowledge', 'services', 'sensors']
-        
-        for table in tables:
-            cursor.execute(f"DELETE FROM {table}")
-            
-        conn.commit()
-        print("✅ All mock data cleared successfully")
-        
-    except Exception as e:
-        print(f"❌ Error clearing data: {str(e)}")
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-
-if __name__ == "__main__":
-    # Can be run directly to insert mock data
-    print("🚀 Starting mock data insertion...")
-    insert_mock_data()
-
-    # Optionally insert sample ratings
-    insert_sample_ratings()
-
-    # Install or update the get_building_sensor_weather stored procedure
-    print("⚙️ Installing get_building_sensor_weather stored procedure...")
-    execute_sql_file("get_building_sensor_weather.sql")

@@ -1,73 +1,91 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
- 
-
--- Installs or updates the get_building_sensor_weather function for combined sensor and weather data
-
-
-CREATE OR REPLACE FUNCTION get_building_sensor_weather(
+CREATE OR REPLACE FUNCTION public.get_building_sensor_weather(
     in_building_id INTEGER,
-    in_start_time TIMESTAMP,
-    in_end_time TIMESTAMP
+    in_start_time  TIMESTAMP,
+    in_end_time    TIMESTAMP
 )
 RETURNS TABLE(
-    sensor_id INTEGER,
-    sensor_type VARCHAR,
-    sensor_value FLOAT,
-    sensor_timestamp TIMESTAMP,
-    measurement_type VARCHAR,
-    sensor_unit VARCHAR,
-    weather_timestamp TIMESTAMP,
-    temperature FLOAT,
-    humidity FLOAT,
-    pressure FLOAT,
-    wind_speed FLOAT,
-    wind_direction FLOAT,
-    precipitation FLOAT,
-    weather_description VARCHAR
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT
-        sd.sensor_id,
-        s.type,
-        sd.value,
-        sd.timestamp,
-        sd.measurement_type,
-        sd.unit,
-        w.timestamp,
-        w.temperature,
-        w.humidity,
-        w.pressure,
-        w.wind_speed,
-        w.wind_direction,
-        w.precipitation,
-        w.weather_description
-    FROM sensors s
-    JOIN sensor_data sd ON s.id = sd.sensor_id
-    JOIN buildings b ON s.building_id = b.id
-    LEFT JOIN weather_data w
-        ON w.lat = b.lat::float
-        AND w.lon = b.lon::float
-        AND w.timestamp BETWEEN in_start_time AND in_end_time
-    WHERE
-        b.id = in_building_id
-        AND sd.timestamp BETWEEN in_start_time AND in_end_time;
-END;
-$$ LANGUAGE plpgsql;
--- Update encrypt_wallet function to be deterministic using HMAC
-CREATE OR REPLACE FUNCTION encrypt_wallet(wallet_address TEXT, encryption_key TEXT)
-RETURNS TEXT AS $$
-BEGIN
-    -- Use HMAC for deterministic encryption (same input always produces same output)
-    -- This allows upsert functionality while still providing security
-    RETURN encode(hmac(wallet_address::bytea, encryption_key::bytea, 'sha256'), 'base64');
-END;
-$$ LANGUAGE plpgsql;
-
-
--- WITH test_values AS (
---     SELECT 'test_wallet' AS wallet, 'test_key' AS key
--- )
--- SELECT encrypt_wallet(wallet, key) as test1 FROM test_values;
--- SELECT encrypt_wallet(wallet, key) as test2 FROM test_values;
--- SELECT encrypt_wallet(wallet, key) as test3 FROM test_values;
+    sensor_id integer,
+    sensor_type character varying,
+    sensor_value double precision,
+    sensor_timestamp timestamp without time zone,
+    measurement_type character varying,
+    sensor_unit character varying,
+    weather_timestamp timestamp without time zone,
+    temperature double precision,
+    humidity double precision,
+    pressure double precision,
+    wind_speed double precision,
+    wind_direction double precision,
+    precipitation double precision,
+    weather_description character varying,
+    hvac_interval_id integer,
+    hvac_is_on boolean,
+    hvac_setpoint double precision,
+    hvac_interval_start timestamp without time zone,
+    hvac_interval_end timestamp without time zone
+)
+LANGUAGE sql
+AS $$
+WITH
+time_series AS (
+    SELECT generate_series(in_start_time, in_end_time, interval '5 minutes')::timestamp AS ts
+),
+bld AS (
+    SELECT b.*
+    FROM public.buildings b
+    WHERE b.id = in_building_id
+),
+sensors_for_bld AS (
+    SELECT s.*
+    FROM public.sensors s
+    WHERE s.building_id = in_building_id
+),
+sd_dedup AS (
+    SELECT DISTINCT ON (sd.sensor_id, sd."timestamp", sd.measurement_type)
+           sd.sensor_id,
+           sd."timestamp",
+           sd.measurement_type,
+           sd.value,
+           sd.unit
+    FROM public.sensor_data sd
+    WHERE sd."timestamp" >= in_start_time
+      AND sd."timestamp" <= in_end_time
+    ORDER BY sd.sensor_id, sd."timestamp", sd.measurement_type, sd.id DESC
+)
+SELECT
+    s.id AS sensor_id,
+    s."type" AS sensor_type,
+    sd.value AS sensor_value,
+    ts.ts AS sensor_timestamp,
+    sd.measurement_type,
+    sd.unit AS sensor_unit,
+    w."timestamp" AS weather_timestamp,
+    w.temperature,
+    w.humidity,
+    w.pressure,
+    w.wind_speed,
+    w.wind_direction,
+    w.precipitation,
+    w.weather_description,
+    hi.id AS hvac_interval_id,
+    hi.is_on AS hvac_is_on,
+    hi.setpoint AS hvac_setpoint,
+    (hi.start_ts AT TIME ZONE 'UTC')::timestamp AS hvac_interval_start,
+    (hi.end_ts   AT TIME ZONE 'UTC')::timestamp AS hvac_interval_end
+FROM time_series ts
+JOIN bld b ON TRUE
+CROSS JOIN sensors_for_bld s
+LEFT JOIN sd_dedup sd
+       ON sd.sensor_id = s.id
+      AND sd."timestamp" = ts.ts
+LEFT JOIN public.weather_data w
+       ON w.lat = (b.lat::float8)
+      AND w.lon = (b.lon::float8)
+      AND w."timestamp" = ts.ts
+LEFT JOIN public.hvac_schedule_intervals hi
+       ON hi.building_id = b.id
+      AND hi.hvac_unit_id = s.hvac_unit_id
+      AND ts.ts >= (hi.start_ts AT TIME ZONE 'UTC')::timestamp
+      AND ts.ts <  (hi.end_ts   AT TIME ZONE 'UTC')::timestamp
+ORDER BY ts.ts, s.id;
+$$;

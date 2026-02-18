@@ -35,7 +35,7 @@ class HVACSensorData(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     indoor_temp = Column(Float, nullable=False)
     outdoor_temp = Column(Float, nullable=False)
-    hvac_operation = Column(Integer, nullable=False)  # 0 = OFF, 1 = ON
+    hvac_operation = Column(Integer, nullable=False)
     energy_consumption = Column(Float, nullable=False)
     setpoint_temp = Column(Float, nullable=True)  # Only when HVAC is ON
     outlet_temp = Column(Float, nullable=True)  # Only when HVAC is ON
