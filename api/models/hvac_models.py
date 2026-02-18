@@ -10,9 +10,6 @@ class Building(Base):
     address = Column(String, nullable=True)
     lat = Column(String, nullable=True)  # Latitude as string for flexibility
     lon = Column(String, nullable=True)  # Longitude as string for flexibility
-from sqlalchemy import Column, Integer, JSON, DateTime, ForeignKey
-from sqlalchemy.sql import func
-from db import Base
 
 class HVACSchedule(Base):
     __tablename__ = "hvac_schedules"

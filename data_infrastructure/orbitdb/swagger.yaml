@@ -1,0 +1,168 @@
+openapi: 3.0.0
+info:
+  title: OrbitDB HTTP API
+  version: 1.0.0
+  description: API for storing and querying model-run records in OrbitDB
+servers:
+  - url: http://localhost:3110
+components:
+  schemas:
+    Run:
+      type: object
+      required:
+        - _id
+        - buildingId
+        - start
+        - end
+        - modelVersion
+        - inputHash
+        - outputHash
+        - createdAt
+      properties:
+        _id:
+          type: string
+          description: Composite key (buildingId|start|end|modelVersion)
+        buildingId:
+          type: string
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        modelVersion:
+          type: string
+        inputHash:
+          type: string
+          description: CID or hash of input snapshot
+        outputHash:
+          type: string
+          description: CID or hash of model output
+        sensorsHash:
+          type: string
+          nullable: true
+        weatherHash:
+          type: string
+          nullable: true
+        modelHash:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+paths:
+  /health:
+    get:
+      summary: Health check for OrbitDB node
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  db:
+                    type: string
+                  address:
+                    type: string
+                  libp2p:
+                    type: array
+                    items:
+                      type: string
+  /runs:
+    post:
+      summary: Store one model-run provenance record (input/output hashes)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Run'
+      responses:
+        '200':
+          description: Run stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  _id:
+                    type: string
+    get:
+      summary: Query runs by buildingId and date window
+      parameters:
+        - in: query
+          name: buildingId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: start
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: end
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: modelVersion
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  count:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Run'
+  /runs/{id}:
+    get:
+      summary: Get one run by id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run record
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  item:
+                    $ref: '#/components/schemas/Run'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  error:
+                    type: string
