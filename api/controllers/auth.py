@@ -14,8 +14,7 @@ import logging
 from utils.rate_limit import rate_limit_dependency
 from db.connection import SessionLocal
 from models.hvac_models import User, UserBuilding
-
-
+from db.connection import get_db
 from models.hvac_unit import HVACUnit
 import bcrypt
 from utils.constants import Role
