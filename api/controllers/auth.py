@@ -81,10 +81,10 @@ def login(
                 detail="Invalid login request. Provide either username/password or Web3 signature data."
             )
     except HTTPException as e:
-        logger.warning(f"Login failed: {e.detail}")
+        logger.warning("Login failed", extra={"detail": str(e.detail).replace('\n', ' ').replace('\r', ' ')})
         raise
     except Exception as e:
-        logger.error(f"Unexpected error during login: {e}")
+        logger.error("Unexpected error during login", extra={"error": str(e).replace('\n', ' ').replace('\r', ' ')})
         raise HTTPException(status_code=500, detail="Internal server error during login")
 
 def handle_traditional_login(data: LoginRequest, request: Request):
@@ -101,7 +101,13 @@ def handle_traditional_login(data: LoginRequest, request: Request):
         r.raise_for_status()
         user_info = r.json()
     except Exception as e:
-        logger.warning(f"External authentication failed for user {data.username}: {e}")
+        logger.warning(
+            "External authentication failed for user", 
+            extra={
+                "username": str(data.username).replace('\n', ' ').replace('\r', ' '),
+                "error": str(e).replace('\n', ' ').replace('\r', ' ')
+            }
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="External authentication failed")
 
     # Create session/token
@@ -119,7 +125,10 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
     try:
         # Validate message format
         if not validate_message_format(data.message, data.address, data.nonce):
-            logger.warning(f"Invalid message format for wallet {data.address}")
+            logger.warning(
+                "Invalid message format for wallet",
+                extra={"wallet": str(data.address).replace('\n', ' ').replace('\r', ' ')}
+            )
             raise HTTPException(
                 status_code=400, 
                 detail="Invalid message format"
@@ -127,7 +136,10 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
 
         # Verify the signature
         if not verify_ethereum_signature(data.message, data.signature, data.address):
-            logger.warning(f"Invalid signature for wallet {data.address}")
+            logger.warning(
+                "Invalid signature for wallet",
+                extra={"wallet": str(data.address).replace('\n', ' ').replace('\r', ' ')}
+            )
             raise HTTPException(
                 status_code=401, 
                 detail="Invalid signature"
@@ -136,7 +148,10 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
         # Look up the user's role from the DB using db_session
         user = db_session.query(User).filter(User.wallet_address == data.address).first()
         if not user:
-            logger.warning(f"Wallet not registered: {data.address}")
+            logger.warning(
+                "Wallet not registered",
+                extra={"wallet": str(data.address).replace('\n', ' ').replace('\r', ' ')}
+            )
             raise HTTPException(status_code=401, detail="Wallet not registered")
         # Find all active roles for this user (across all buildings)
         user_roles = db_session.query(UserBuilding).filter(
@@ -150,7 +165,13 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
             role_priority = {"admin": 5, "owner": 4, "manager": 3, "occupant": 2, "device": 1, "user": 0}
             role = max((ur.role for ur in user_roles), key=lambda r: role_priority.get(r, 0))
 
-        logger.info(f"Web3 login successful for wallet {data.address} with role {role}")
+        logger.info(
+            "Web3 login successful for wallet with role",
+            extra={
+                "wallet": str(data.address).replace('\n', ' ').replace('\r', ' '),
+                "role": str(role).replace('\n', ' ').replace('\r', ' ')
+            }
+        )
         # Create session/token for Web3 user with correct role
         return create_auth_response(
             user=data.address,
@@ -161,10 +182,22 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
         )
 
     except HTTPException as e:
-        logger.warning(f"Web3 login failed for wallet {data.address}: {e.detail}")
+        logger.warning(
+            "Web3 login failed for wallet",
+            extra={
+                "wallet": str(data.address).replace('\n', ' ').replace('\r', ' '),
+                "detail": str(e.detail).replace('\n', ' ').replace('\r', ' ')
+            }
+        )
         raise
     except Exception as e:
-        logger.error(f"Web3 login error for wallet {data.address}: {e}")
+        logger.error(
+            "Web3 login error for wallet",
+            extra={
+                "wallet": str(data.address).replace('\n', ' ').replace('\r', ' '),
+                "error": str(e).replace('\n', ' ').replace('\r', ' ')
+            }
+        )
         raise HTTPException(
             status_code=500, 
             detail="Internal server error during Web3 authentication"
