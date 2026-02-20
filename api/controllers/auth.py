@@ -14,7 +14,58 @@ import logging
 from utils.rate_limit import rate_limit_dependency
 from db.connection import SessionLocal
 from models.hvac_models import User, UserBuilding
+
+
+from models.hvac_unit import HVACUnit
+import bcrypt
+from utils.constants import Role
+
 router = APIRouter()
+
+# Device authentication request/response schemas
+class DeviceAuthRequest(BaseModel):
+    device_key: str
+    device_secret: str
+
+class DeviceAuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+# --- Device Authentication (JWT issuing for devices) ---
+@router.post(
+    "/device/auth",
+    response_model=DeviceAuthResponse,
+    responses={
+        401: {"description": "Invalid device credentials or revoked."},
+        404: {"description": "Device not found."},
+        500: {"description": "Internal server error."}
+    },
+    tags=["Device Authentication"]
+)
+def device_auth(
+    data: DeviceAuthRequest,
+    db: Annotated[Session, Depends(get_db)]
+):
+    hvac_unit = db.query(HVACUnit).filter(HVACUnit.device_key == data.device_key).first()
+    if not hvac_unit:
+        raise HTTPException(status_code=404, detail="Device not found.")
+    if hvac_unit.device_revoked_at:
+        raise HTTPException(status_code=401, detail="Device credentials revoked.")
+    if not hvac_unit.device_secret_hash or not bcrypt.checkpw(data.device_secret.encode(), hvac_unit.device_secret_hash.encode()):
+        raise HTTPException(status_code=401, detail="Invalid device credentials.")
+    # Issue JWT for device
+    # Optionally, you could also include a list of sensor IDs if you want to restrict to specific sensors
+    payload = {
+        "sub": str(hvac_unit.id),
+        "typ": Role.DEVICE,
+        "building_id": hvac_unit.building_id,
+        # Add more claims as needed for sensor validation
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1)
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return DeviceAuthResponse(access_token=token)
+
+# --- User Authentication (already implemented: /login, /me, etc.) ---
 
 
 # Configure logging
@@ -159,11 +210,23 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
             UserBuilding.status == "active"
         ).all()
         if not user_roles:
-            role = "user"
+            role = Role.OCCUPANT
         else:
             # If multiple, pick the most privileged (admin > owner > manager > occupant > device > user)
-            role_priority = {"admin": 5, "owner": 4, "manager": 3, "occupant": 2, "device": 1, "user": 0}
-            role = max((ur.role for ur in user_roles), key=lambda r: role_priority.get(r, 0))
+            role_priority = {
+                Role.ADMIN: 4,
+                Role.BUILDING_MANAGER: 3,  # If you want to treat building_manager as manager
+                Role.OCCUPANT: 2,
+                Role.DEVICE: 1,
+                Role.USER if hasattr(Role, 'USER') else "user": 0
+            }
+            # Map DB role string to enum if possible
+            def map_role(r):
+                try:
+                    return Role(r)
+                except ValueError:
+                    return r
+            role = max((map_role(ur.role) for ur in user_roles), key=lambda r: role_priority.get(r, 0))
 
         logger.info(
             "Web3 login successful for wallet with role",
@@ -214,7 +277,7 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
         print("🍪 Setting session cookie...")
         request.session.update({
             "user": user,
-            "role": role,
+            "role": str(role),
             "wallet": wallet,
             "auth_method": auth_method,
             "verified_at": datetime.now(timezone.utc).isoformat()
@@ -227,7 +290,7 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
         # Support multiple roles if present (role can be a list or string)
         payload = {
             "user": user,
-            "role": role if isinstance(role, (list, str)) else [role],
+            "role": str(role) if isinstance(role, Role) else role,
             "wallet": wallet,
             "auth_method": auth_method,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
@@ -327,7 +390,7 @@ def get_current_user(request: Request):
     # Try session first if AUTH_TYPE is cookie
     if AUTH_TYPE == "cookie":
         user = request.session.get("user")
-        role = request.session.get("role", "user")
+        role = request.session.get("role", str(Role.OCCUPANT))
         wallet = request.session.get("wallet")
         auth_method = request.session.get("auth_method", "traditional")
         
@@ -349,7 +412,7 @@ def get_current_user(request: Request):
                 payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
                 return {
                     "user": payload.get("user"),
-                    "role": payload.get("role", "user"),
+                    "role": payload.get("role", str(Role.OCCUPANT)),
                     "wallet": payload.get("wallet"),
                     "auth_method": payload.get("auth_method", "traditional"),
                     "auth_type": "jwt"

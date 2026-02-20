@@ -1,9 +1,11 @@
 
+
 from fastapi import Depends, HTTPException, status, Request
 import jwt
 import os
 from functools import wraps
 from pathlib import Path
+from utils.constants import Role
 
 # Load .env if present
 try:
@@ -30,8 +32,16 @@ def get_current_user_role(required_roles=None):
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         except Exception:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
-        user_role = payload.get("role", "user")
-        if required_roles and user_role not in required_roles:
-            raise HTTPException(status_code=403, detail="Insufficient role")
+        # Accept both string and enum in payload, default to OCCUPANT
+        user_role = payload.get("role", str(Role.OCCUPANT))
+        try:
+            user_role_enum = Role(user_role)
+        except ValueError:
+            user_role_enum = user_role  # fallback to string if not a valid enum
+        if required_roles:
+            # Allow required_roles to be enums or strings, convert all to string for comparison
+            required_roles_str = [str(r) for r in required_roles]
+            if str(user_role_enum) not in required_roles_str:
+                raise HTTPException(status_code=403, detail="Insufficient role")
         return payload
     return dependency
