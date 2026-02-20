@@ -1,10 +1,11 @@
 FROM node:22-alpine
 
 # Create app directory and set permissions
-RUN mkdir -p /home/node/app/node_modules && chown -R node:node /home/node/app
 
-# Install curl using apk (Alpine package manager)
-RUN apk add --no-cache curl
+# Combine directory creation, permission setting, and curl installation in one RUN
+RUN mkdir -p /home/node/app/node_modules \
+	&& chown -R node:node /home/node/app \
+	&& apk add --no-cache curl
 
 WORKDIR /home/node/app
 

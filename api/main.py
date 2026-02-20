@@ -12,6 +12,7 @@ from controllers.sensordata import router as sensordata_router
 from controllers.smartcontract import router as smartcontract_router
 from controllers.predict import router as predict_router
 from controllers.auth import router as auth_router
+from controllers.building_sensor_weather import router as building_sensor_weather_router
 from db.connection import SessionLocal, engine, Base
 from models.hvac_models import Building
 from models.service import Service  # Import Service model to ensure table creation
@@ -21,9 +22,12 @@ from models.rate import Rate  # Import Rate model to ensure table creation
 from models.predictor import Predictor, TrainingHistory  # Import updated models
 from models.knowledge import Knowledge
 from services.hvac_optimizer_service import HVACOptimizerService  # Import HVAC service
-from models.hvac_unit import HVACUnit  
 from db.mock_data import insert_mock_data  # Updated import path
-from utils.sql import apply_sql_file
+
+## Cron Scheduler for weather updates
+# from services.weather_service import setup_weather_scheduler
+# from db.connection import async_session_maker 
+
 app = FastAPI()
 
 # Add session middleware for login/logout
@@ -36,17 +40,8 @@ if os.path.isdir(vue_dist_path):
     app.mount("/", StaticFiles(directory=vue_dist_path, html=True), name="static")
 
 
-
 # Create database tables
 Base.metadata.create_all(bind=engine)
-
-# Apply stored procedure/function after tables exist
-update_fn_path = os.path.join(os.path.dirname(__file__), 'db', 'update_function.sql')
-if os.path.exists(update_fn_path):
-    apply_sql_file(update_fn_path, engine)
-    print("✅ Applied update_function.sql after table creation.")
-else:
-    print(f"⚠️ update_function.sql not found at {update_fn_path}")
 
 # Insert mock data if DEV mode is enabled
 if os.getenv("DEV", "false").lower() == "true":
@@ -70,7 +65,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from controllers.building_sensor_weather import router as building_sensor_weather_router
+# Weather update scheduler setup
+# @app.on_event("startup")
+# async def start_schedulers():
+#     setup_weather_scheduler(async_session_maker)
+#     # Add other scheduled jobs here if needed
+#     pass
 
 app.include_router(health_router)
 app.include_router(auth_router)

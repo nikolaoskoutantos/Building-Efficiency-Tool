@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.predictor import Predictor, TrainingHistory
 from services.hvac_optimizer_service import HVACOptimizerService
-from typing import List, Optional
+from typing import List, Optional, Annotated
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/predict", tags=["Predictors"])
@@ -75,16 +75,29 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/", response_model=PredictorRead)
-def create_predictor(predictor: PredictorCreate, db: Session = Depends(get_db)):
+@router.post(
+    "/",
+    response_model=PredictorRead,
+    responses={
+        400: {"description": "Invalid input"},
+        500: {"description": "Internal server error"},
+    },
+)
+def create_predictor(predictor: PredictorCreate, db: Annotated[Session, Depends(get_db)]):
     db_predictor = Predictor(**predictor.dict())
     db.add(db_predictor)
     db.commit()
     db.refresh(db_predictor)
     return db_predictor
 
-@router.get("/", response_model=List[PredictorRead])
-def read_predictors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@router.get(
+    "/",
+    response_model=List[PredictorRead],
+    responses={
+        500: {"description": "Internal server error"},
+    },
+)
+def read_predictors(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: int = 100):
     return db.query(Predictor).offset(skip).limit(limit).all()
 
 @router.post("/predict_one")
@@ -94,7 +107,12 @@ def predict_one(input_data: dict):
     return {"prediction": "This is a mock prediction", "input": input_data}
 
 # HVAC-specific endpoints
-@router.post("/hvac/train")
+@router.post(
+    "/hvac/train",
+    responses={
+        500: {"description": "Training failed"},
+    },
+)
 async def train_hvac_model(request: HVACTrainingRequest, background_tasks: BackgroundTasks):
     """Train HVAC optimization model for a specific location using database sensor data."""
     try:
@@ -119,7 +137,12 @@ async def train_hvac_model(request: HVACTrainingRequest, background_tasks: Backg
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
-@router.post("/hvac/predict")
+@router.post(
+    "/hvac/predict",
+    responses={
+        500: {"description": "Prediction failed"},
+    },
+)
 async def predict_hvac(request: HVACPredictionRequest):
     """Predict temperature and energy consumption for HVAC operation schedule."""
     try:
@@ -146,7 +169,12 @@ async def predict_hvac(request: HVACPredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-@router.post("/hvac/optimize")
+@router.post(
+    "/hvac/optimize",
+    responses={
+        500: {"description": "Optimization failed"},
+    },
+)
 async def optimize_hvac_schedule(request: HVACOptimizationRequest):
     """Optimize HVAC operation schedule for energy efficiency."""
     try:
@@ -180,7 +208,12 @@ async def optimize_hvac_schedule(request: HVACOptimizationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
 
-@router.post("/hvac/evaluate")
+@router.post(
+    "/hvac/evaluate",
+    responses={
+        500: {"description": "Evaluation failed"},
+    },
+)
 async def evaluate_metrics(request: HVACEvaluationRequest):
     """Calculate evaluation metrics for HVAC predictions."""
     try:
@@ -196,7 +229,12 @@ async def evaluate_metrics(request: HVACEvaluationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
-@router.get("/hvac/models")
+@router.get(
+    "/hvac/models",
+    responses={
+        500: {"description": "Failed to retrieve models"},
+    },
+)
 async def get_all_hvac_models():
     """Get all HVAC models across all locations."""
     try:
@@ -208,7 +246,12 @@ async def get_all_hvac_models():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve models: {str(e)}")
 
-@router.get("/hvac/training-history/{latitude}/{longitude}")
+@router.get(
+    "/hvac/training-history/{latitude}/{longitude}",
+    responses={
+        500: {"description": "Failed to retrieve training history"},
+    },
+)
 async def get_hvac_training_history(latitude: float, longitude: float):
     """Get training history for a specific location."""
     try:
@@ -226,7 +269,12 @@ async def get_hvac_training_history(latitude: float, longitude: float):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to retrieve training history: {str(e)}")
 
-@router.post("/hvac/evaluate-schedule")
+@router.post(
+    "/hvac/evaluate-schedule",
+    responses={
+        500: {"description": "Schedule evaluation failed"},
+    },
+)
 async def evaluate_hvac_schedule(request: HVACPredictionRequest):
     """Evaluate a specific HVAC operation schedule with detailed metrics."""
     try:

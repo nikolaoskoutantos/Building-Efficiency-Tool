@@ -5,7 +5,7 @@ from db import get_db
 from db.functions import submit_rating, get_service_score, get_user_ratings
 from models.rate import Rate
 from controllers.auth import get_current_user
-from typing import List, Optional
+from typing import List, Optional, Annotated
 from datetime import datetime
 from pydantic import BaseModel, Field
 import os
@@ -28,7 +28,7 @@ class RateCreate(RateBase):
 
 class RateRead(RateBase):
     id: int
-    feedback: Optional[str]
+    feedback: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     class Config:
@@ -40,11 +40,17 @@ class ServiceScore(BaseModel):
     total_ratings: int
     rating_distribution: dict
 
-@router.post("/submit")
+@router.post(
+    "/submit",
+    responses={
+        400: {"description": "Wallet address required for rating"},
+        500: {"description": "Database error"},
+    },
+)
 def submit_user_rating(
     rate: RateCreate, 
     request: Request,
-    db: Session = Depends(get_db)
+    db: Annotated[Session, Depends(get_db)]
 ):
     """
     Submit or update a rating for a service with encrypted wallet.
@@ -145,8 +151,14 @@ def submit_user_rating(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-@router.get("/service/{service_id}/score")
-def get_service_rating_score(service_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/service/{service_id}/score",
+    responses={
+        404: {"description": "No ratings found for this service"},
+        500: {"description": "Database error"},
+    },
+)
+def get_service_rating_score(service_id: int, db: Annotated[Session, Depends(get_db)]):
     """
     Get aggregated score and statistics for a service.
     """
@@ -168,10 +180,16 @@ def get_service_rating_score(service_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-@router.get("/my-ratings")
+@router.get(
+    "/my-ratings",
+    responses={
+        400: {"description": "Wallet address required"},
+        500: {"description": "Database error"},
+    },
+)
 def get_my_ratings(
     request: Request,
-    db: Session = Depends(get_db)
+    db: Annotated[Session, Depends(get_db)]
 ):
     """
     Get all ratings submitted by the current user.
@@ -204,8 +222,14 @@ def get_my_ratings(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 # Keep your existing endpoints for backward compatibility
-@router.post("/", response_model=RateRead)
-def create_rate(rate: RateCreate, db: Session = Depends(get_db)):
+@router.post(
+    "/",
+    response_model=RateRead,
+    responses={
+        500: {"description": "Database error"},
+    },
+)
+def create_rate(rate: RateCreate, db: Annotated[Session, Depends(get_db)]):
     """Legacy endpoint - consider using /submit instead for encrypted ratings"""
     db_rate = Rate(**rate.dict())
     db.add(db_rate)
@@ -213,19 +237,39 @@ def create_rate(rate: RateCreate, db: Session = Depends(get_db)):
     db.refresh(db_rate)
     return db_rate
 
-@router.get("/", response_model=List[RateRead])
-def read_rates(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@router.get(
+    "/",
+    response_model=List[RateRead],
+    responses={
+        500: {"description": "Database error"},
+    },
+)
+def read_rates(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: int = 100):
     return db.query(Rate).offset(skip).limit(limit).all()
 
-@router.get("/{rate_id}", response_model=RateRead)
-def read_rate(rate_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/{rate_id}",
+    response_model=RateRead,
+    responses={
+        404: {"description": RATE_NOT_FOUND_MSG},
+        500: {"description": "Database error"},
+    },
+)
+def read_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
     rate = db.query(Rate).filter(Rate.id == rate_id).first()
     if not rate:
         raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
     return rate
 
-@router.put("/{rate_id}", response_model=RateRead)
-def update_rate(rate_id: int, rate: RateCreate, db: Session = Depends(get_db)):
+@router.put(
+    "/{rate_id}",
+    response_model=RateRead,
+    responses={
+        404: {"description": RATE_NOT_FOUND_MSG},
+        500: {"description": "Database error"},
+    },
+)
+def update_rate(rate_id: int, rate: RateCreate, db: Annotated[Session, Depends(get_db)]):
     db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
     if not db_rate:
         raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
@@ -235,8 +279,14 @@ def update_rate(rate_id: int, rate: RateCreate, db: Session = Depends(get_db)):
     db.refresh(db_rate)
     return db_rate
 
-@router.delete("/{rate_id}")
-def delete_rate(rate_id: int, db: Session = Depends(get_db)):
+@router.delete(
+    "/{rate_id}",
+    responses={
+        404: {"description": RATE_NOT_FOUND_MSG},
+        500: {"description": "Database error"},
+    },
+)
+def delete_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
     db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
     if not db_rate:
         raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
@@ -251,8 +301,13 @@ class RateTestCreate(BaseModel):
     rating: float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
     feedback: Optional[str] = None
 
-@router.post("/test-upsert")
-def test_upsert_functionality(rate: RateTestCreate, db: Session = Depends(get_db)):
+@router.post(
+    "/test-upsert",
+    responses={
+        500: {"description": "Upsert test error"},
+    },
+)
+def test_upsert_functionality(rate: RateTestCreate, db: Annotated[Session, Depends(get_db)]):
     """
     Test endpoint that demonstrates UPSERT with encrypted wallet addresses.
     Same wallet + same service = UPDATE existing rating.
@@ -348,8 +403,13 @@ def test_upsert_functionality(rate: RateTestCreate, db: Session = Depends(get_db
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Upsert test error: {str(e)}")
 
-@router.get("/test-view-data")
-def view_encrypted_data(db: Session = Depends(get_db)):
+@router.get(
+    "/test-view-data",
+    responses={
+        500: {"description": "View data error"},
+    },
+)
+def view_encrypted_data(db: Annotated[Session, Depends(get_db)]):
     """
     View all stored encrypted data in the database.
     This endpoint is for testing only - remove in production.
