@@ -1,5 +1,8 @@
 from fastapi import APIRouter, HTTPException, status, Request, Response, Depends
+from typing import Annotated
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from typing import Optional
 import os
 import requests
 import jwt
@@ -7,45 +10,82 @@ from datetime import datetime, timedelta, timezone
 from eth_account.messages import encode_defunct
 from eth_account import Account
 import hashlib
+import logging
+from utils.rate_limit import rate_limit_dependency
+from db.connection import SessionLocal
+from models.hvac_models import User, UserBuilding
+router = APIRouter()
 
-router = APIRouter(prefix="/auth", tags=["Auth"])
+
+# Configure logging
+logger = logging.getLogger("auth")
+logging.basicConfig(level=logging.INFO)
 
 AUTH_SYSTEM_URL = os.getenv("AUTH_SYSTEM_URL")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
-JWT_SECRET = os.getenv("SESSION_SECRET_KEY", "your-secret-key")
+JWT_SECRET = os.environ.get("SESSION_SECRET_KEY")
+if not JWT_SECRET:
+    raise RuntimeError("SESSION_SECRET_KEY must be set in your .env file or environment variables for JWT authentication.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60
 AUTH_TYPE = os.getenv("AUTH_TYPE", "cookie")  # 'cookie' or 'jwt'
 
 class LoginRequest(BaseModel):
     # Traditional login fields (optional)
-    username: str = None
-    password: str = None
-    
+    username: Optional[str] = None
+    password: Optional[str] = None
     # Web3 login fields (optional)
-    message: str = None
-    signature: str = None
-    nonce: str = None
-    address: str = None
+    message: Optional[str] = None
+    signature: Optional[str] = None
+    nonce: Optional[str] = None
+    address: Optional[str] = None
 
-@router.post("/login")
-def login(data: LoginRequest, request: Request, response: Response):
+
+def get_db():
+    db_session = SessionLocal()
+    try:
+        yield db_session
+    finally:
+        db_session.close()
+
+DbSession = Annotated[Session, Depends(get_db)]
+
+@router.post(
+    "/login",
+    responses={
+        400: {"description": "Invalid login request. Provide either username/password or Web3 signature data."},
+        401: {"description": "Unauthorized: Invalid credentials or signature."},
+        500: {"description": "Internal server error during login"}
+    }
+)
+def login(
+    data: LoginRequest,
+    request: Request,
+    response: Response,
+    rate_limit: Annotated[None, Depends(rate_limit_dependency)],
+    db_session: DbSession
+):
     """
     Unified login endpoint that handles both traditional and Web3 authentication.
     """
-    # Check if this is Web3 authentication
-    if data.address and data.signature and data.message and data.nonce:
-        return handle_web3_login(data, request)
-    
-    # Check if this is traditional authentication
-    elif data.username and data.password:
-        return handle_traditional_login(data, request)
-    
-    else:
-        raise HTTPException(
-            status_code=400, 
-            detail="Invalid login request. Provide either username/password or Web3 signature data."
-        )
+    try:
+        # Check if this is Web3 authentication
+        if data.address and data.signature and data.message and data.nonce:
+            return handle_web3_login(data, request, db_session)
+        # Check if this is traditional authentication
+        elif data.username and data.password:
+            return handle_traditional_login(data, request)
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid login request. Provide either username/password or Web3 signature data."
+            )
+    except HTTPException as e:
+        logger.warning(f"Login failed: {e.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during login: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during login")
 
 def handle_traditional_login(data: LoginRequest, request: Request):
     """Handle traditional username/password login."""
@@ -61,9 +101,11 @@ def handle_traditional_login(data: LoginRequest, request: Request):
         r.raise_for_status()
         user_info = r.json()
     except Exception as e:
+        logger.warning(f"External authentication failed for user {data.username}: {e}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="External authentication failed")
 
     # Create session/token
+    logger.info(f"Traditional login successful for user {user_info.get('username')}")
     return create_auth_response(
         user=user_info.get("username"),
         role=user_info.get("role", "user"),
@@ -72,36 +114,57 @@ def handle_traditional_login(data: LoginRequest, request: Request):
         request=request
     )
 
-def handle_web3_login(data: LoginRequest, request: Request):
+def handle_web3_login(data: LoginRequest, request: Request, db_session: Session):
     """Handle Web3 signature-based login."""
     try:
         # Validate message format
         if not validate_message_format(data.message, data.address, data.nonce):
+            logger.warning(f"Invalid message format for wallet {data.address}")
             raise HTTPException(
                 status_code=400, 
                 detail="Invalid message format"
             )
-        
+
         # Verify the signature
         if not verify_ethereum_signature(data.message, data.signature, data.address):
+            logger.warning(f"Invalid signature for wallet {data.address}")
             raise HTTPException(
                 status_code=401, 
                 detail="Invalid signature"
             )
-        
-        # Create session/token for Web3 user
+
+        # Look up the user's role from the DB using db_session
+        user = db_session.query(User).filter(User.wallet_address == data.address).first()
+        if not user:
+            logger.warning(f"Wallet not registered: {data.address}")
+            raise HTTPException(status_code=401, detail="Wallet not registered")
+        # Find all active roles for this user (across all buildings)
+        user_roles = db_session.query(UserBuilding).filter(
+            UserBuilding.user_id == user.id,
+            UserBuilding.status == "active"
+        ).all()
+        if not user_roles:
+            role = "user"
+        else:
+            # If multiple, pick the most privileged (admin > owner > manager > occupant > device > user)
+            role_priority = {"admin": 5, "owner": 4, "manager": 3, "occupant": 2, "device": 1, "user": 0}
+            role = max((ur.role for ur in user_roles), key=lambda r: role_priority.get(r, 0))
+
+        logger.info(f"Web3 login successful for wallet {data.address} with role {role}")
+        # Create session/token for Web3 user with correct role
         return create_auth_response(
             user=data.address,
-            role="user",
+            role=role,
             wallet=data.address,
             auth_method="web3",
             request=request
         )
-        
-    except HTTPException:
+
+    except HTTPException as e:
+        logger.warning(f"Web3 login failed for wallet {data.address}: {e.detail}")
         raise
     except Exception as e:
-        print(f"Web3 login error: {e}")
+        logger.error(f"Web3 login error for wallet {data.address}: {e}")
         raise HTTPException(
             status_code=500, 
             detail="Internal server error during Web3 authentication"
@@ -128,9 +191,10 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
     token = None
     if AUTH_TYPE == "jwt":
         print("🔑 Creating JWT token...")
+        # Support multiple roles if present (role can be a list or string)
         payload = {
             "user": user,
-            "role": role,
+            "role": role if isinstance(role, (list, str)) else [role],
             "wallet": wallet,
             "auth_method": auth_method,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
@@ -149,9 +213,9 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
     
     if token:
         response_data["token"] = token
-        print(f"📤 Returning response with JWT token")
+        print("Returning response with JWT token")
     else:
-        print(f"📤 Returning response without JWT token")
+        print("Returning response without JWT token")
         
     return response_data
 
@@ -199,7 +263,14 @@ def validate_message_format(message: str, address: str, nonce: str) -> bool:
     except Exception:
         return False
 
-@router.post("/logout")
+@router.post(
+    "/logout",
+    responses={
+        200: {"description": "Logged out successfully"},
+        401: {"description": "Not authenticated"},
+        500: {"description": "Internal server error during logout"}
+    }
+)
 def logout(request: Request):
     """
     Logout endpoint that handles both traditional and Web3 sessions.
@@ -208,7 +279,14 @@ def logout(request: Request):
     request.session.clear()
     return {"message": "Logged out successfully"}
 
-@router.get("/me")
+@router.get(
+    "/me",
+    responses={
+        200: {"description": "Current user information returned"},
+        401: {"description": "Not authenticated"},
+        500: {"description": "Internal server error during authentication check"}
+    }
+)
 def get_current_user(request: Request):
     """
     Get current user endpoint that handles both traditional and Web3 authentication.

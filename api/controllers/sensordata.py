@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+from pyparsing import Optional
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.sensordata import SensorData
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -11,7 +13,7 @@ router = APIRouter(prefix="/sensordata", tags=["SensorData"])
 # Pydantic schemas
 class SensorDataBase(BaseModel):
     sensor_id: int
-    timestamp: datetime = None
+    timestamp: Optional[datetime] = None
     value: float
 
 class SensorDataCreate(SensorDataBase):
@@ -29,8 +31,12 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/", response_model=SensorDataRead)
-def create_sensor_data(data: SensorDataCreate, db: Session = Depends(get_db)):
+@router.post(
+    "/",
+    response_model=SensorDataRead,
+    responses={404: {"description": "SensorData not found"}}
+)
+def create_sensor_data(data: SensorDataCreate, db: Annotated[Session, Depends(get_db)]):
     db_data = SensorData(**data.dict())
     db.add(db_data)
     db.commit()
@@ -38,18 +44,25 @@ def create_sensor_data(data: SensorDataCreate, db: Session = Depends(get_db)):
     return db_data
 
 @router.get("/", response_model=List[SensorDataRead])
-def read_sensor_data(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_sensor_data(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: int = 100 ):
     return db.query(SensorData).offset(skip).limit(limit).all()
 
-@router.get("/{data_id}", response_model=SensorDataRead)
-def read_single_sensor_data(data_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/{data_id}",
+    response_model=SensorDataRead,
+    responses={404: {"description": "SensorData not found"}}
+)
+def read_single_sensor_data(data_id: int, db: Annotated[Session, Depends(get_db)]):
     data = db.query(SensorData).filter(SensorData.id == data_id).first()
     if not data:
         raise HTTPException(status_code=404, detail="SensorData not found")
     return data
 
-@router.delete("/{data_id}")
-def delete_sensor_data(data_id: int, db: Session = Depends(get_db)):
+@router.delete(
+    "/{data_id}",
+    responses={200: {"description": "SensorData deleted"}, 404: {"description": "SensorData not found"}}
+)
+def delete_sensor_data(data_id: int, db: Annotated[Session, Depends(get_db)]):
     db_data = db.query(SensorData).filter(SensorData.id == data_id).first()
     if not db_data:
         raise HTTPException(status_code=404, detail="SensorData not found")

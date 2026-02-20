@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.service import Service
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 
 # Error message constants
 SERVICE_NOT_FOUND_MSG = "Service not found"
+from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/services", tags=["Services"])
 
@@ -38,7 +40,11 @@ def get_db():
         db.close()
 
 @router.post("/", response_model=ServiceRead)
-def create_service(service: ServiceCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def create_service(
+    service: ServiceCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict, Depends(get_current_user)]
+):
     db_service = Service(**service.dict())
     db.add(db_service)
     db.commit()
@@ -46,18 +52,31 @@ def create_service(service: ServiceCreate, db: Session = Depends(get_db), curren
     return db_service
 
 @router.get("/", response_model=List[ServiceRead])
-def read_services(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_services(db: Annotated[Session, Depends(get_db)],skip: int = 0, limit: int = 100):
     return db.query(Service).offset(skip).limit(limit).all()
 
-@router.get("/{service_id}", response_model=ServiceRead)
-def read_service(service_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/{service_id}",
+    response_model=ServiceRead,
+    responses={404: {"description": "Service not found"}}
+)
+def read_service(service_id: int, db: Annotated[Session, Depends(get_db)]):
     service = db.query(Service).filter(Service.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
     return service
 
-@router.put("/{service_id}", response_model=ServiceRead)
-def update_service(service_id: int, service: ServiceCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+@router.put(
+    "/{service_id}",
+    response_model=ServiceRead,
+    responses={404: {"description": "Service not found"}}
+)
+def update_service(
+    service_id: int,
+    service: ServiceCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict, Depends(get_current_user)]
+):
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
@@ -67,8 +86,15 @@ def update_service(service_id: int, service: ServiceCreate, db: Session = Depend
     db.refresh(db_service)
     return db_service
 
-@router.delete("/{service_id}")
-def delete_service(service_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+@router.delete(
+    "/{service_id}",
+    responses={200: {"description": "Service deleted"}, 404: {"description": "Service not found"}}
+)
+def delete_service(
+    service_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[dict, Depends(get_current_user)]
+):
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
