@@ -19,10 +19,12 @@ const DEFAULT_KV_MOUNT = process.env.VAULT_KV_MOUNT || 'kv'; // if you use KV v2
 const DEFAULT_TRANSIT_MOUNT = process.env.VAULT_TRANSIT_MOUNT || 'transit'; // allow non-default transit mount
 const DEFAULT_CHUNK_BYTES = Number(process.env.CHUNK_BYTES) || (4 * 1024 * 1024); // 4MB
 
+
 class VaultService {
+  client = null;
+  isInitialized = false;
+
   constructor() {
-    this.client = null;
-    this.isInitialized = false;
     this.initializeVault();
   }
 

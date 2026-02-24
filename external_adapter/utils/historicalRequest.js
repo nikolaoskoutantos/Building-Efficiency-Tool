@@ -163,7 +163,8 @@ const createHistoricalRequest = async (input, callback) => {
 
 // Handle requests for historical weather data
 const handleHistoricalRequest = (req, res) => {
-  console.log('POST Data (Historical): ', req.body);
+  // Avoid logging raw user-controlled data to prevent injection attacks
+  console.log('POST /historical called');
   createHistoricalRequest(req.body, (status, result) => {
     console.log('Historical Result: ', result);
     res.status(status).json(result);

@@ -212,7 +212,8 @@ const createRequest = async (input, callback, forecast = false) => {
 
 // Robust async handler with timestamped logging
 const handleWeatherRequestWithLogging = async (req, res, log = console.log) => {
-  log(`[${new Date().toISOString()}] [Weather] POST Data:`, req.body);
+  // Avoid logging raw user-controlled data to prevent injection attacks
+  log(`[${new Date().toISOString()}] [Weather] POST /weather called`);
   try {
     await createRequest(
       req.body,
@@ -255,7 +256,8 @@ const handleForecastRequestWithLogging = async (req, res, log = console.log) => 
 };
 
 const handleForecastRequest = (req, res) => {
-  console.log('POST Data: ', req.body);
+  // Avoid logging raw user-controlled data to prevent injection attacks
+  console.log('POST /forecasts called');
   createRequest(req.body, (status, result) => {
     console.log('Forecast Result: ', result);
     res.status(status).json(result);

@@ -52,7 +52,8 @@ function logWithTimestamp(...args) {
 }
 
 router.post('/', async (req, res) => {
-	logWithTimestamp('POST /forecasts called with body:', req.body);
+	// Avoid logging raw user-controlled data to prevent injection attacks
+	logWithTimestamp('POST /forecasts called');
 	try {
 		// Call the async handler and await result
 		await require('../utils/index').handleForecastRequestWithLogging(req, res, logWithTimestamp);

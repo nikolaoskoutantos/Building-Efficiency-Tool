@@ -22,7 +22,8 @@ async function getIpfsClient() {
     ipfsClient = create({ url: IPFS_URL });
     return ipfsClient;
   } catch (error) {
-    console.warn('Failed to initialize local IPFS client:', error.message);
+    // Log only static message, avoid user-controlled data
+    console.warn('Failed to initialize local IPFS client');
     return null;
   }
 }
@@ -46,7 +47,8 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
       const mfsPath = `/${mfsDir}/${filename}`;
       await client.files.write(mfsPath, data, { create: true, parents: true, truncate: true });
 
-      console.log(`✅ Local IPFS: Stored '${filename}' with CID: ${cid}`);
+      // Log only safe metadata, not user-controlled data
+      console.log(`✅ Local IPFS: Stored file with CID: ${cid}`);
       return cid.toString();
     }
 
@@ -75,7 +77,8 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
 
     const json = await response.json();
     const cid = json.Hash;
-    console.log(`✅ Filebase: Uploaded '${filename}' with CID: ${cid}`);
+    // Log only safe metadata, not user-controlled data
+    console.log(`✅ Filebase: Uploaded file with CID: ${cid}`);
     
     // Add to MFS (Mutable File System) so it shows in FILES section
     try {
@@ -96,17 +99,21 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
       });
       
       if (cpResponse.ok) {
-        console.log(`📁 Added to MFS: ${mfsPath}`);
+        // Log only static message
+        console.log('📁 Added file to MFS');
       } else {
-        console.log(`⚠️ MFS add failed: ${cpResponse.statusText}`);
+        // Log only static message
+        console.log('⚠️ MFS add failed');
       }
     } catch (mfsError) {
-      console.log(`⚠️ MFS add error: ${mfsError.message}`);
+      // Log only static message
+      console.log('⚠️ MFS add error');
     }
     
     return cid;
   } catch (err) {
-    console.error('❌ Error uploading to IPFS:', err.message);
+    // Log only static message
+    console.error('❌ Error uploading to IPFS');
     throw new Error('Failed to upload data to IPFS');
   }
 };
@@ -118,7 +125,8 @@ const retrieveFromIPFS = async (cid) => {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.text();
   } catch (err) {
-    console.error('❌ Retrieve error:', err.message);
+    // Log only static message
+    console.error('❌ Retrieve error');
     throw new Error('Failed to retrieve IPFS content');
   }
 };
