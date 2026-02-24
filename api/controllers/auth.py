@@ -19,52 +19,68 @@ from models.hvac_unit import HVACUnit
 import bcrypt
 from utils.constants import Role
 
-router = APIRouter()
+router = APIRouter(tags=["Device & User Authentication"])
 
 # Device authentication request/response schemas
 class DeviceAuthRequest(BaseModel):
     device_key: str
     device_secret: str
 
+
+# Standard device auth response
 class DeviceAuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+# EMQX-compatible response
+class EMQXAuthResponse(BaseModel):
+    result: str
+    is_superuser: Optional[bool] = None
+
 # --- Device Authentication (JWT issuing for devices) ---
+
+
+from fastapi.responses import JSONResponse
+
 @router.post(
     "/device/auth",
-    response_model=DeviceAuthResponse,
     responses={
+        200: {"description": "Device authenticated", "content": {"application/json": {}}},
         401: {"description": "Invalid device credentials or revoked."},
         404: {"description": "Device not found."},
         500: {"description": "Internal server error."}
     },
-    tags=["Device Authentication"]
+    tags=["Device & User Authentication"]
 )
 def device_auth(
-    data: DeviceAuthRequest,
-    db: Annotated[Session, Depends(get_db)]
+    req: DeviceAuthRequest,
+    db: Annotated[Session, Depends(get_db)],
+    request: Request
 ):
-    hvac_unit = db.query(HVACUnit).filter(HVACUnit.device_key == data.device_key).first()
+    x_request_source = request.headers.get("x-request-source")
+    hvac_unit = db.query(HVACUnit).filter(HVACUnit.device_key == req.device_key).first()
+    if x_request_source and x_request_source.upper() == "EMQX":
+        if not hvac_unit or hvac_unit.device_revoked_at:
+            return JSONResponse(content={"result": "deny"})
+        if not hvac_unit.device_secret_hash or not bcrypt.checkpw(req.device_secret.encode(), hvac_unit.device_secret_hash.encode()):
+            return JSONResponse(content={"result": "deny"})
+        return JSONResponse(content={"result": "allow", "is_superuser": False})
+
+    # Standard device authentication (JWT issuing)
     if not hvac_unit:
         raise HTTPException(status_code=404, detail="Device not found.")
     if hvac_unit.device_revoked_at:
         raise HTTPException(status_code=401, detail="Device credentials revoked.")
-    if not hvac_unit.device_secret_hash or not bcrypt.checkpw(data.device_secret.encode(), hvac_unit.device_secret_hash.encode()):
+    if not hvac_unit.device_secret_hash or not bcrypt.checkpw(req.device_secret.encode(), hvac_unit.device_secret_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid device credentials.")
-    # Issue JWT for device
-    # Optionally, you could also include a list of sensor IDs if you want to restrict to specific sensors
     payload = {
         "sub": str(hvac_unit.id),
         "typ": Role.DEVICE,
         "building_id": hvac_unit.building_id,
-        # Add more claims as needed for sensor validation
         "exp": datetime.now(timezone.utc) + timedelta(hours=1)
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return DeviceAuthResponse(access_token=token)
-
-# --- User Authentication (already implemented: /login, /me, etc.) ---
 
 
 # Configure logging

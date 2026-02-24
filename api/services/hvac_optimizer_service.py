@@ -535,7 +535,7 @@ class HVACOptimizerService:
     def _calculate_data_hash(self, csv_path: str) -> str:
         """Calculate hash of training data for version control."""
         with open(csv_path, 'rb') as f:
-            return hashlib.md5(f.read()).hexdigest()
+            return hashlib.sha512(f.read()).hexdigest()
     
     def predict_one_hour(self, operation: List[int], starting_temp: float, 
                         starting_time: str, outdoor_temps: List[float], 

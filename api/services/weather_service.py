@@ -1,50 +1,34 @@
 """
 Weather service for fetching and storing weather data from external APIs, supporting async scheduled operation.
 """
-
-import os
-import asyncio
-import aiohttp
-from dotenv import load_dotenv
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 from datetime import datetime, timezone
-import logging
-from apscheduler.schedulers.asyncio import AsyncIOScheduler  # Only import if/when APScheduler is installed
-
-# Load .env for config-driven API selection
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
-MODE = os.getenv('MODE', 'Web2')
-BASE_URL = os.getenv('WEATHER_BASE_URL', 'https://api.openweathermap.org/data/2.5/weather')
-API_KEY = os.getenv('WEATHER_API_KEY')
-BEARER_TOKEN = os.getenv('WEATHER_BEARER_TOKEN')
-UNITS = os.getenv('WEATHER_UNITS', 'metric')
-IPFS_GATEWAY = os.getenv('IPFS_GATEWAY', 'https://ipfs.io/ipfs/')
-
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-MAX_CONCURRENCY = 20
-RETRY_LIMIT = 2
-
-logger = logging.getLogger("weather_scheduler")
-
-async def fetch_weather(lat, lon, session):
     """
-    Fetch weather from the configured provider (OpenWeatherMap or Open-Meteo).
-    """
-    if MODE == 'Web2':
-        params = {
-            "lat": lat,
-            "lon": lon,
-            "appid": API_KEY,
-            "units": UNITS
-        }
-        headers = {}
-        if BEARER_TOKEN:
-            headers["Authorization"] = f"Bearer {BEARER_TOKEN}"
-        url = BASE_URL
-    else:
-        # Default to Open-Meteo for Web3 or fallback
+
+# Example: Fetch weather data directly from OpenWeather API (Web2)
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+
         url = f"{OPEN_METEO_URL}?latitude={lat}&longitude={lon}&current_weather=true"
+    """
+    Fetch current weather data from OpenWeather API (Web2).
+    Returns parsed weather data.
+    """
+    url = "https://api.openweathermap.org/data/2.5/weather"
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "appid": OPENWEATHER_API_KEY,
+        "units": "metric",
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+# Example usage:
+# result = fetch_weather_openweather(52.52, 13.405)
+# print(result)
         params = None
         headers = {}
     for attempt in range(RETRY_LIMIT + 1):
@@ -58,6 +42,35 @@ async def fetch_weather(lat, lon, session):
                 continue
             logger.error(f"Failed to fetch weather for ({lat}, {lon}): {e}")
             return None
+
+def fetch_weather_data(lat: float, lon: float, service: str = None, forecast: bool = False):
+    """
+    Fetch weather data from the external adapter (OpenWeather/OpenMeteo).
+    Args:
+        lat (float): Latitude
+        lon (float): Longitude
+        service (str): 'openweather', 'openmeteo', or None for both
+        forecast (bool): True for forecast, False for current weather
+    Returns:
+        dict: Weather data response
+    """
+    url = EXTERNAL_ADAPTER_URL
+    headers = {}
+    if EXTERNAL_ADAPTER_API_KEY:
+        headers["x-api-key"] = EXTERNAL_ADAPTER_API_KEY
+    payload = {
+        "data": {
+            "lat": lat,
+            "lon": lon,
+            "service": service,
+        }
+    }
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 async def upsert_weather(async_db: AsyncSession, lat, lon, weather_json):
     # Support both OpenWeatherMap and Open-Meteo response formats
@@ -159,3 +172,7 @@ def setup_weather_scheduler(async_db_maker):
         hour="*"
     )
     scheduler.start()
+
+# Example usage:
+# web2_result = fetch_weather_web2(52.52, 13.405, service="openweather")
+# web3_result = fetch_weather_web3("Qm...CID...")

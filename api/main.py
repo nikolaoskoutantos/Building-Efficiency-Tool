@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -13,6 +14,10 @@ from controllers.smartcontract import router as smartcontract_router
 from controllers.predict import router as predict_router
 from controllers.auth import router as auth_router
 from controllers.building_sensor_weather import router as building_sensor_weather_router
+from controllers.hvac import router as hvac_router
+from controllers.acl import router as acl_router
+from controllers.devices import router as devices_router
+from utils.emqx_acl_middleware import EMQXACLHeaderMiddleware
 from db.connection import SessionLocal, engine, Base
 from models.hvac_models import Building
 from models.service import Service  # Import Service model to ensure table creation
@@ -23,12 +28,21 @@ from models.predictor import Predictor, TrainingHistory  # Import updated models
 from models.knowledge import Knowledge
 from services.hvac_optimizer_service import HVACOptimizerService  # Import HVAC service
 from db.mock_data import insert_mock_data  # Updated import path
+import logging
+import sys
 
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True,  # overrides existing uvicorn logging config
+)
 ## Cron Scheduler for weather updates
 # from services.weather_service import setup_weather_scheduler
 # from db.connection import async_session_maker 
 
 app = FastAPI()
+# app.add_middleware(EMQXACLHeaderMiddleware)
 
 # Add session middleware for login/logout
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "your-secret-key")
@@ -82,3 +96,6 @@ app.include_router(sensordata_router)
 app.include_router(smartcontract_router)
 app.include_router(predict_router)
 app.include_router(building_sensor_weather_router)
+app.include_router(hvac_router)
+app.include_router(acl_router)
+app.include_router(devices_router)
