@@ -37,9 +37,11 @@ class VaultService {
       this.client = vault(vaultConfig);
       this.isInitialized = true;
       console.log(`[${new Date().toISOString()}] ✅ Vault client initialized`);
-      console.log(`[${new Date().toISOString()}] 🔗 Vault endpoint: ${vaultConfig.endpoint}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] 🔗 Vault endpoint configured`);
     } catch (error) {
-      console.error('❌ Failed to initialize Vault client:', error.message);
+      // Log only static message
+      console.error('❌ Failed to initialize Vault client');
       this.isInitialized = false;
     }
   }
@@ -50,7 +52,8 @@ class VaultService {
       const h = await this.client.health();
       return h.initialized && !h.sealed;
     } catch (e) {
-      console.error('❌ Vault health check failed:', e.message);
+      // Log only static message
+      console.error('❌ Vault health check failed');
       return false;
     }
   }
@@ -73,7 +76,8 @@ class VaultService {
   // 1) Get one-time DEK for local crypto
   async getDataKey(keyName = DEFAULT_TRANSIT_KEY) {
     try {
-      console.log(`[${new Date().toISOString()}] 🔑 Requesting DEK from Vault for key: ${keyName}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] 🔑 Requesting DEK from Vault`);
       const res = await this.client.write(`${DEFAULT_TRANSIT_MOUNT}/datakey/plaintext/${keyName}`, {});
       console.log(`[${new Date().toISOString()}] ✅ DEK generated successfully`);
       return {
@@ -82,7 +86,8 @@ class VaultService {
         keyVersion: res.data.key_version
       };
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ DEK generation failed: ${error.message}`);
+      // Log only static message
+      console.error(`[${new Date().toISOString()}] ❌ DEK generation failed`);
       throw error;
     }
   }
@@ -107,16 +112,20 @@ class VaultService {
 
   // ---------- KV (CID → wrapped_dek mapping) ----------
   async storeCidMapping(cid, mappingObj) {
-    console.log(`[${new Date().toISOString()}] [DEBUG] storeCidMapping called with cid:`, cid, 'mappingObj:', mappingObj);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] [DEBUG] storeCidMapping called`);
     // KV v2 write: <mount>/data/<path>
     const path = `${DEFAULT_KV_MOUNT}/data/files/${cid}`;
     try {
-      console.log(`[${new Date().toISOString()}] [Vault] Writing CID mapping to: ${path}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] [Vault] Writing CID mapping`);
       const result = await this.client.write(path, { data: mappingObj });
-      console.log(`[${new Date().toISOString()}] [Vault] Successfully wrote CID mapping for ${cid}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] [Vault] Successfully wrote CID mapping`);
       return result;
     } catch (err) {
-      console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping for ${cid}:`, err.message);
+      // Log only static message
+      console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping`);
       // Optionally rethrow or handle error
       throw err;
     }
@@ -125,7 +134,8 @@ class VaultService {
   async getCidMapping(cid) {
     const path = `${DEFAULT_KV_MOUNT}/data/files/${cid}`;
     const res = await this.client.read(path);
-    console.log(`[${new Date().toISOString()}] [Vault] Read CID mapping for ${cid}:`, res.data.data);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] [Vault] Read CID mapping`);
     return res.data.data; // unwrap KV v2 payload
   }
 
@@ -224,7 +234,8 @@ class VaultService {
    * Returns: { cid, wrapped_dek, key_version, alg, chunk_bytes, nonce_mode }
    */
   async encryptStreamToIpfs(plaintextReadable, ipfsApiUrl, keyName = DEFAULT_TRANSIT_KEY, chunkBytes = DEFAULT_CHUNK_BYTES, mfsDir = 'encrypted_data') {
-    console.log(`[${new Date().toISOString()}] [DEBUG] === encryptStreamToIpfs called with updated code ===`);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] [DEBUG] encryptStreamToIpfs called`);
     // 1) DEK from Vault (disposable)
     const { dek, wrappedDek, keyVersion } = await this.getDataKey(keyName);
 
@@ -240,7 +251,8 @@ class VaultService {
       // Classic IPFS nodes use /api/v0/add
       uploadUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/add` : `${ipfsApiUrl}/api/v0/add`;
     }
-    console.log(`[${new Date().toISOString()}] 📤 Uploading encrypted data to IPFS: ${uploadUrl}`);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] 📤 Uploading encrypted data to IPFS`);
     const form = new FormData();
     form.append('file', cipherStream, { filename: 'cipher.bin' });
 
@@ -255,16 +267,19 @@ class VaultService {
         maxContentLength: Infinity,
       });
       
-      console.log(`[${new Date().toISOString()}] ✅ Encrypted data uploaded to IPFS with CID: ${res.data.Hash}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] ✅ Encrypted data uploaded to IPFS`);
     } catch (ipfsError) {
-      console.error(`[${new Date().toISOString()}] ❌ IPFS upload failed: ${ipfsError.message}`);
+      // Log only static message
+      console.error(`[${new Date().toISOString()}] ❌ IPFS upload failed`);
       throw ipfsError;
     }
 
     const cid = res.data.Hash;
     
     // FORCE IMMEDIATE RETURN - NO MFS OPERATIONS 
-    console.log(`[${new Date().toISOString()}] [DEBUG] FORCE RETURNING with CID: ${cid}`);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] [DEBUG] FORCE RETURNING with CID`);
     const result = {
       cid,
       wrapped_dek: wrappedDek,
@@ -273,7 +288,8 @@ class VaultService {
       chunk_bytes: chunkBytes,
       nonce_mode: 'random'
     };
-    console.log(`[${new Date().toISOString()}] [DEBUG] Result object:`, result);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] [DEBUG] Result object`);
     return result;
   }
 
@@ -285,16 +301,19 @@ class VaultService {
     const { cid, wrapped_dek, chunk_bytes = DEFAULT_CHUNK_BYTES } = meta;
 
     try {
-      console.log(`[${new Date().toISOString()}] 🔓 Starting decryption for CID: ${cid}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] 🔓 Starting decryption for CID`);
       
       // 1) Unwrap DEK via Vault
-      console.log(`[${new Date().toISOString()}] 🔑 Unwrapping DEK via Vault...`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] 🔑 Unwrapping DEK via Vault`);
       const dek = await this.unwrapDek(wrapped_dek);
       console.log(`[${new Date().toISOString()}] ✅ DEK unwrapped successfully`);
 
       // 2) Stream ciphertext from IPFS
       const catUrl = ipfsApiUrl.includes('/api/v0') ? `${ipfsApiUrl}/cat` : `${ipfsApiUrl}/api/v0/cat`;
-      console.log(`[${new Date().toISOString()}] 📥 Fetching encrypted data from: ${catUrl}?arg=${cid}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] 📥 Fetching encrypted data from IPFS`);
       
       const res = await axios.post(`${catUrl}?arg=${cid}`, {}, { 
         responseType: 'stream',
@@ -302,11 +321,14 @@ class VaultService {
           'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
         }
       });
-      console.log(`[${new Date().toISOString()}] ✅ IPFS response received, status: ${res.status}`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] ✅ IPFS response received`);
 
       // 3) Decrypt streaming and pipe
-      console.log(`[${new Date().toISOString()}] 🔐 Starting stream decryption...`);
+      // Log only static message
+      console.log(`[${new Date().toISOString()}] 🔐 Starting stream decryption`);
       const plainStream = this.decryptReadable(res.data, dek, chunk_bytes);
+      // Log only static message
       console.log(`[${new Date().toISOString()}] ✅ Stream decryption initialized`);
       
       if (destWritable) {
@@ -318,8 +340,9 @@ class VaultService {
       }
       return plainStream; // caller can consume as Readable
     } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Decryption error in decryptFromIpfsToStream: ${error.message}`);
-      console.error(`[${new Date().toISOString()}] ❌ Error stack: ${error.stack}`);
+      // Log only static message
+      console.error(`[${new Date().toISOString()}] ❌ Decryption error in decryptFromIpfsToStream`);
+      console.error(`[${new Date().toISOString()}] ❌ Error stack`);
       throw error;
     }
   }

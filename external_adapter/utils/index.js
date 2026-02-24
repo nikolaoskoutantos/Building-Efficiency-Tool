@@ -38,7 +38,8 @@ const fetchOpenWeatherData = async (lat, lon, forecast) => {
     const openWeatherResponse = await Requester.request(openWeatherConfig);
     return { service: 'openweather', data: openWeatherResponse.data };
   } catch (error) {
-    console.warn("Failed to fetch OpenWeather data:", error.message);
+    // Log only static message
+    console.warn("Failed to fetch OpenWeather data");
     return null;
   }
 };
@@ -59,7 +60,8 @@ const fetchOpenMeteoData = async (lat, lon, forecast) => {
     const openMeteoResponse = await Requester.request(openMeteoConfig);
     return { service: 'openmeteo', data: openMeteoResponse.data };
   } catch (error) {
-    console.warn("Failed to fetch OpenMeteo data:", error.message);
+    // Log only static message
+    console.warn("Failed to fetch OpenMeteo data");
     return null;
   }
 };
@@ -75,7 +77,8 @@ const fetchQoeData = () => {
     }
     return null;
   } catch (err) {
-    console.warn('Could not read or parse dummy data:', err.message);
+    // Log only static message
+    console.warn('Could not read or parse dummy data');
     return null;
   }
 };
@@ -160,10 +163,12 @@ const createRequest = async (input, callback, forecast = false) => {
         const ipfsApiUrl = ipfsUrl.replace('/api/v0', ''); // Remove API path if present
         // Encrypt and upload to IPFS
         const result = await encryptStreamToIpfs(dataStream, ipfsApiUrl, 'weather-data');
-        console.log(`[${new Date().toISOString()}] [DEBUG] encryptStreamToIpfs result:`, result);
+        // Log only static message
+        console.log(`[${new Date().toISOString()}] [DEBUG] encryptStreamToIpfs result`);
         // Store CID mapping in Vault KV
         try {
-          console.log(`[${new Date().toISOString()}] [Vault] Storing CID mapping for ${result.cid} with metadata:`, result);
+          // Log only static message
+          console.log(`[${new Date().toISOString()}] [Vault] Storing CID mapping`);
           await storeCidMapping(result.cid, {
             wrapped_dek: result.wrapped_dek,
             key_version: result.key_version,
@@ -176,12 +181,14 @@ const createRequest = async (input, callback, forecast = false) => {
             data_type: 'weather_data'
           });
         } catch (vaultWriteErr) {
-          console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping for ${result.cid}:`, vaultWriteErr.message);
+          // Log only static message
+          console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping`);
           // Optionally: delete the file from IPFS here if you want strict consistency
           throw new Error('Vault write failed after IPFS upload. Data is on IPFS but not decryptable.');
         }
         cid = result.cid;
-        console.log(`[${new Date().toISOString()}] ✅ Encrypted data uploaded to IPFS: ${cid}`);
+        // Log only safe metadata
+        console.log(`[${new Date().toISOString()}] ✅ Encrypted data uploaded to IPFS`);
       } else {
         console.warn(`[${new Date().toISOString()}] ⚠️ Vault unhealthy, falling back to plain IPFS upload`);
         cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
@@ -191,7 +198,8 @@ const createRequest = async (input, callback, forecast = false) => {
       cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
     }
   } catch (vaultError) {
-    console.error(`[${new Date().toISOString()}] ❌ Vault encryption or write failed:`, vaultError.message);
+    // Log only static message
+    console.error(`[${new Date().toISOString()}] ❌ Vault encryption or write failed`);
     // Do NOT fall back to plain IPFS upload if Vault write fails after encryption
     return callback(500, {
       jobRunID,
@@ -202,7 +210,8 @@ const createRequest = async (input, callback, forecast = false) => {
   }
 
   // Return only the CID in the response
-  console.log(`[${new Date().toISOString()}] [DEBUG] Calling callback with CID:`, cid, 'jobRunID:', jobRunID);
+  // Log only safe metadata
+  console.log(`[${new Date().toISOString()}] [DEBUG] Calling callback with CID`);
   callback(200, {
     jobRunID,
     cid: cid, // Return only the CID
@@ -259,7 +268,8 @@ const handleForecastRequest = (req, res) => {
   // Avoid logging raw user-controlled data to prevent injection attacks
   console.log('POST /forecasts called');
   createRequest(req.body, (status, result) => {
-    console.log('Forecast Result: ', result);
+    // Log only static message
+    console.log('Forecast Result');
     res.status(status).json(result);
   }, true); // Forecast request
 };
@@ -326,7 +336,8 @@ const handleCostFileResponse = (decryptedBuffer, metadata, req, res, jobRunID, c
 
   // Default: return base64 JSON for backward compatibility
   const b64 = decryptedBuffer.toString('base64');
-  console.log(`✅ Decrypted binary cost file for CID: ${cid}, filename: ${filename}`);
+  // Log only static message
+  console.log(`✅ Decrypted binary cost file`);
   return res.status(200).json({
     jobRunID,
     cid,
@@ -364,7 +375,8 @@ const decryptDataFromIpfs = async (cid, metadata) => {
 
 // Handle decryption requests
 const handleDecryptRequest = async (req, res) => {
-  console.log(`[${new Date().toISOString()}] Decrypt Request Data: `, req.body);
+  // Avoid logging user-controlled data
+  console.log(`[${new Date().toISOString()}] Decrypt request received`);
   
   const { cid } = req.body;
   const jobRunID = uuidv4();
@@ -376,7 +388,8 @@ const handleDecryptRequest = async (req, res) => {
       return res.status(validation.error.statusCode).json(validation.error);
     }
 
-    console.log(`[${new Date().toISOString()}] 🔓 Decrypting data for CID: ${cid}`);
+    // Log only safe metadata
+    console.log(`[${new Date().toISOString()}] 🔓 Decrypting data for CID`);
     
     // Get CID mapping from Vault
     const metadata = await getCidMapping(cid);
@@ -421,7 +434,8 @@ const handleDecryptRequest = async (req, res) => {
       throw new Error('Unexpected decrypted data format');
     }
     
-    console.log(`[${new Date().toISOString()}] ✅ Successfully decrypted data for CID: ${cid}`);
+    // Log only static message
+    console.log(`[${new Date().toISOString()}] ✅ Successfully decrypted data`);
     
     res.status(200).json({
       jobRunID,
@@ -443,7 +457,8 @@ const handleDecryptRequest = async (req, res) => {
     });
     
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Decryption failed:`, error.message);
+    // Log only static message
+    console.error(`[${new Date().toISOString()}] ❌ Decryption failed`);
     res.status(500).json({
       jobRunID,
       status: 'errored',
@@ -592,11 +607,12 @@ const handleHealthRequest = async (req, res) => {
     healthStatus.overall_status = overallStatus;
     healthStatus.jobRunID = jobRunID;
     
-    console.log(`🎡 Health check completed: ${overallStatus}`);
+    console.log(`🎡 Health check completed`);
     res.status(statusCode).json(healthStatus);
     
   } catch (error) {
-    console.error('❌ Health check failed:', error.message);
+    // Log only static message
+    console.error('❌ Health check failed');
     res.status(500).json({
       jobRunID,
       overall_status: 'error',
