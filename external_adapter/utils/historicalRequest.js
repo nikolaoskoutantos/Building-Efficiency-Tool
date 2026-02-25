@@ -1,7 +1,7 @@
 const { Requester, Validator } = require('@chainlink/external-adapter');
 const { uploadToIPFS } = require('./ipfs.js');
 const { encryptStreamToIpfs, storeCidMapping, healthCheck } = require('./vault');
-const { Readable } = require('stream');
+const { Readable } = require('node:stream');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 

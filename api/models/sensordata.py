@@ -1,5 +1,5 @@
 
-from sqlalchemy import Column, Integer, Float, DateTime, ForeignKey, String, JSON, Index
+from sqlalchemy import Column, Integer, Float, DateTime, ForeignKey, String, JSON, Index, UniqueConstraint
 from db import Base
 from datetime import datetime
 
@@ -9,17 +9,21 @@ SENSORS_ID_FK = "sensors.id"
 class WeatherData(Base):
     __tablename__ = "weather_data"
 
-    id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("timestamp", "lat", "lon", name="ux_weather_data_ts_lat_lon"),
+        Index("ix_weather_data_lat_lon_ts", "lat", "lon", "timestamp"),
+    )
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False)  # see point (2)
     lat = Column(Float, nullable=False)
     lon = Column(Float, nullable=False)
-    temperature = Column(Float, nullable=True)
-    humidity = Column(Float, nullable=True)
-    pressure = Column(Float, nullable=True)
-    wind_speed = Column(Float, nullable=True)
-    wind_direction = Column(Float, nullable=True)
-    precipitation = Column(Float, nullable=True)
-    weather_description = Column(String(100), nullable=True)
+    temperature = Column(Float)
+    humidity = Column(Float)
+    pressure = Column(Float)
+    wind_speed = Column(Float)
+    wind_direction = Column(Float)
+    precipitation = Column(Float)
+    weather_description = Column(String(100))
 
 class SensorData(Base):
     __tablename__ = "sensor_data"

@@ -5,7 +5,7 @@ const { handleHistoricalRequest } = require('../utils/historicalRequest');
 /**
  * @swagger
  * /historical:
- *   post:
+ *   post:  
  *     summary: Fetch historical weather data
  *     description: Fetch historical weather data from OpenMeteo for a given date range.
  *     requestBody:

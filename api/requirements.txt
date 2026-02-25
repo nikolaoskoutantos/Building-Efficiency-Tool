@@ -19,3 +19,5 @@ apscheduler
 bcrypt
 mlflow
 paho-mqtt
+aiohttp
+asyncpg

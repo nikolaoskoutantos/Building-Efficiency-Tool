@@ -76,9 +76,9 @@ const fetchQoeData = () => {
       return { service: 'qoe', data: dummyData };
     }
     return null;
-  } catch (err) {
-    // Log only static message
-    console.warn('Could not read or parse dummy data');
+  } catch (error) {
+    // Log the actual error for debugging (do not ignore exception)
+    console.warn('Could not read or parse dummy data:', error);
     return null;
   }
 };
@@ -180,9 +180,9 @@ const createRequest = async (input, callback, forecast = false) => {
             job_id: jobRunID,
             data_type: 'weather_data'
           });
-        } catch (vaultWriteErr) {
-          // Log only static message
-          console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping`);
+        } catch (error) {
+          // Log the actual error for debugging (do not ignore exception)
+          console.error(`[${new Date().toISOString()}] [Vault] Failed to write CID mapping:`, error);
           // Optionally: delete the file from IPFS here if you want strict consistency
           throw new Error('Vault write failed after IPFS upload. Data is on IPFS but not decryptable.');
         }
@@ -437,12 +437,20 @@ const handleDecryptRequest = async (req, res) => {
     // Log only static message
     console.log(`[${new Date().toISOString()}] ✅ Successfully decrypted data`);
     
+    let responseData;
+    if (Array.isArray(weatherData)) {
+      if (weatherData.length === 1) {
+        responseData = weatherData[0].data;
+      } else {
+        responseData = weatherData.map(item => ({ service: item.service, data: item.data }));
+      }
+    } else {
+      responseData = weatherData.data;
+    }
     res.status(200).json({
       jobRunID,
       cid,
-      data: Array.isArray(weatherData) 
-        ? (weatherData.length === 1 ? weatherData[0].data : weatherData.map(item => ({ service: item.service, data: item.data })))
-        : weatherData.data,
+      data: responseData,
       metadata: {
         timestamp: metadata.timestamp,
         filename: metadata.filename,

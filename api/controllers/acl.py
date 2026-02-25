@@ -39,17 +39,37 @@ def parse_and_validate_topic(topic, building_id, device_key):
         return None, None, "building_mismatch"
     if topic_device_key != device_key:
         return None, None, "device_key_mismatch"
-    resource = parts[4] if len(parts) > 4 else ""
-    return parts, resource, None
+
+    # Device-level topic: building/{building_id}/device/{device_key}/{resource}
+    if len(parts) == 5:
+        resource = parts[4]
+        return parts, resource, None
+
+    # Sensor-level topic: building/{building_id}/device/{device_key}/sensor/{sensor_id}/{resource}
+    if len(parts) == 7 and parts[4] == "sensor":
+        resource = parts[6]
+        return parts, resource, None
+
+    return None, None, "invalid_topic_structure"
 
 def check_action_policy(action, resource):
     if action not in ("publish", "subscribe"):
         return False, "invalid_action"
-    if action == "publish" and resource not in ("status", "sensor"):
-        return False, "publish_not_allowed_for_resource"
-    if action == "subscribe" and resource not in ("cmd", "config"):
-        return False, "subscribe_not_allowed_for_resource"
-    return True, None
+    # Device-level resources
+    device_publish = ("status", "sensor")
+    device_subscribe = ("cmd", "config")
+    # Sensor-level resources
+    sensor_publish = ("status", "sensor")
+    sensor_subscribe = ("cmd", "config")
+    if action == "publish" and resource in device_publish:
+        return True, None
+    if action == "subscribe" and resource in device_subscribe:
+        return True, None
+    if action == "publish" and resource in sensor_publish:
+        return True, None
+    if action == "subscribe" and resource in sensor_subscribe:
+        return True, None
+    return False, "not_allowed_for_resource"
 
 def check_sensor_ownership(db, parts, hvac_unit_id):
     if len(parts) < 6:
@@ -94,7 +114,8 @@ async def device_acl(body: EMQXACLRequest):
         if not ok:
             return deny(action_error)
 
-        if resource == "sensor":
+        # Sensor-level topic: check sensor ownership
+        if len(parts) == 7 and parts[4] == "sensor":
             ok, sensor_error = check_sensor_ownership(db, parts, hvac_unit_id)
             if not ok:
                 return deny(sensor_error)

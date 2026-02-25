@@ -1,7 +1,7 @@
 from fastapi import FastAPI
-
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 from starlette.middleware.sessions import SessionMiddleware
 import os
 from controllers.health import router as health_router
@@ -37,9 +37,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     force=True,  # overrides existing uvicorn logging config
 )
-## Cron Scheduler for weather updates
-# from services.weather_service import setup_weather_scheduler
-# from db.connection import async_session_maker 
+
+# Cron Scheduler for weather updates
+from services.weather_service import setup_weather_scheduler
+from db.connection import async_session_maker
 
 app = FastAPI()
 # app.add_middleware(EMQXACLHeaderMiddleware)
@@ -79,12 +80,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Weather update scheduler setup
-# @app.on_event("startup")
-# async def start_schedulers():
-#     setup_weather_scheduler(async_session_maker)
-#     # Add other scheduled jobs here if needed
-#     pass
+
+@asynccontextmanager
+async def lifespan(app):
+    setup_weather_scheduler(async_session_maker)
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 app.include_router(health_router)
 app.include_router(auth_router)

@@ -22,7 +22,7 @@ const handleCostGroupRequest = async (req, res) => {
     const { id: jobRunID, data } = req.body;
     
     // Validate required parameters
-    if (!data || !data.query_type) {
+    if (!data?.query_type) {
       return res.status(400).json({
         jobRunID,
         status: 'errored',
@@ -231,9 +231,8 @@ const applyTransforms = (data, transforms) => {
   
   for (const transform of transforms) {
     const { operation, params } = transform;
-    
     switch (operation) {
-      case 'select':
+      case 'select': {
         transformed = transformed.map(item => {
           const selected = {};
           for (const field of params.fields || []) {
@@ -242,8 +241,8 @@ const applyTransforms = (data, transforms) => {
           return selected;
         });
         break;
-        
-      case 'rename':
+      }
+      case 'rename': {
         transformed = transformed.map(item => {
           const renamed = { ...item };
           for (const [oldName, newName] of Object.entries(params.mappings || {})) {
@@ -255,16 +254,24 @@ const applyTransforms = (data, transforms) => {
           return renamed;
         });
         break;
-        
-      case 'sort':
+      }
+      case 'sort': {
         const { field, direction = 'asc' } = params;
         transformed.sort((a, b) => {
           const aVal = getNestedValue(a, field);
           const bVal = getNestedValue(b, field);
-          const result = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+          let result;
+          if (aVal < bVal) {
+            result = -1;
+          } else if (aVal > bVal) {
+            result = 1;
+          } else {
+            result = 0;
+          }
           return direction === 'desc' ? -result : result;
         });
         break;
+      }
     }
   }
   
@@ -348,22 +355,27 @@ const applyAggregations = (data, aggregations) => {
     const values = data.map(item => getNestedValue(item, field)).filter(val => val != null);
     
     switch (operation) {
-      case 'count':
+      case 'count': {
         results[`${field}_count`] = values.length;
         break;
-      case 'sum':
+      }
+      case 'sum': {
         results[`${field}_sum`] = values.reduce((sum, val) => sum + Number(val || 0), 0);
         break;
-      case 'avg':
+      }
+      case 'avg': {
         const sum = values.reduce((s, val) => s + Number(val || 0), 0);
         results[`${field}_avg`] = values.length > 0 ? sum / values.length : 0;
         break;
-      case 'min':
+      }
+      case 'min': {
         results[`${field}_min`] = Math.min(...values.map(Number));
         break;
-      case 'max':
+      }
+      case 'max': {
         results[`${field}_max`] = Math.max(...values.map(Number));
         break;
+      }
     }
   }
   
@@ -406,7 +418,7 @@ const formatOutput = async (data, format) => {
  * Helper functions
  */
 const getNestedValue = (obj, path) => {
-  return path.split('.').reduce((current, key) => current && current[key], obj);
+  return path.split('.').reduce((current, key) => current?.[key], obj);
 };
 
 const applyFilterCondition = (fieldValue, operator, value) => {
