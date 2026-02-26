@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 """
 Weather service for fetching and storing weather data from external APIs, supporting async scheduled operation.
 """
@@ -279,7 +282,10 @@ async def _process_building(row, sem, session, async_db_maker, counters):
             counters['failed'] += 1
 
 async def refresh_weather_for_all_buildings(async_db_maker):
-    from models.building import Building  # Adjust import as needed
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from models.hvac_models import Building  # Absolute import for CLI compatibility
     start = datetime.now()
     counters = {'processed': 0, 'succeeded': 0, 'failed': 0}
     async with async_db_maker() as db:
@@ -299,11 +305,11 @@ def setup_weather_scheduler(async_db_maker):
         from services.weather_service import setup_weather_scheduler
         setup_weather_scheduler(async_session_maker)
     """
-    import asyncio
     scheduler = AsyncIOScheduler(timezone="Europe/Athens")
     scheduler.add_job(
-        lambda: asyncio.create_task(refresh_weather_for_all_buildings(async_db_maker)),
+        refresh_weather_for_all_buildings,
         "cron",
-        hour="*"
+        minute="*/10",
+        args=[async_db_maker]
     )
     scheduler.start()
