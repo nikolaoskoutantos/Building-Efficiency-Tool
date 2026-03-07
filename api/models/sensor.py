@@ -25,11 +25,11 @@ class Sensor(Base):
     lat = Column(Float, nullable=False)
     lon = Column(Float, nullable=False)
 
-    rate_of_sampling = Column(Float, nullable=False)
-    raw_data_id = Column(Integer, nullable=False)
+    rate_of_sampling = Column(Float, nullable=False, default=5.0)
 
     unit = Column(String, nullable=False)
 
     room = Column(String, nullable=True)
     zone = Column(String, nullable=True)
     central_unit = Column(String, nullable=True)
+    payload_path = Column(String, nullable=True)

@@ -44,7 +44,7 @@ class ScheduleRead(ScheduleCreate):
     id: int
     created_at: str
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 @router.get(

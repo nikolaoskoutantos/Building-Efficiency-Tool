@@ -1,4 +1,7 @@
 import datetime
+import uuid
+import secrets
+import bcrypt
 from sqlalchemy import and_
 from db.connection import SessionLocal
 
@@ -33,7 +36,7 @@ def insert_mock_data():
             print("🏢 Building Pilot1 already exists")
 
         # 2) User
-        user_wallet = "0xUSERWALLET1234567890"
+        user_wallet = "0xe8375c8e6eb3c48dfafb1f573651a6b12aaa273c"
         user = db.query(User).filter_by(wallet_address=user_wallet).first()
         if not user:
             user = User(wallet_address=user_wallet)
@@ -64,18 +67,42 @@ def insert_mock_data():
         ).first()
 
         if not hvac_unit:
+            # Generate device credentials for mock data
+            device_key = str(uuid.uuid4())
+            device_secret = secrets.token_urlsafe(48)
+            device_secret_hash = bcrypt.hashpw(device_secret.encode(), bcrypt.gensalt()).decode()
+            now = datetime.datetime.now().isoformat()
+            
             hvac_unit = HVACUnit(
                 building_id=pilot_building.id,
                 room="101",
                 zone="A",
                 central_unit="CU1",
+                device_key=device_key,
+                device_secret_hash=device_secret_hash,
+                device_secret_rotated_at=now,
+                device_revoked_at=None
             )
             db.add(hvac_unit)
             db.commit()
             db.refresh(hvac_unit)
-            print(f"❄️ Created HVAC unit id={hvac_unit.id}")
+            print(f"❄️ Created HVAC unit id={hvac_unit.id} with device_key={device_key[:8]}...")
         else:
             print(f"❄️ HVAC unit already exists id={hvac_unit.id}")
+            
+            # Update existing units that lack device keys
+            if not hvac_unit.device_key:
+                device_key = str(uuid.uuid4())
+                device_secret = secrets.token_urlsafe(48)
+                device_secret_hash = bcrypt.hashpw(device_secret.encode(), bcrypt.gensalt()).decode()
+                now = datetime.datetime.now().isoformat()
+                
+                hvac_unit.device_key = device_key
+                hvac_unit.device_secret_hash = device_secret_hash
+                hvac_unit.device_secret_rotated_at = now
+                hvac_unit.device_revoked_at = None
+                db.commit()
+                print(f"🔑 Updated HVAC unit id={hvac_unit.id} with device credentials")
 
         # 5) Create sensors attached to HVAC unit (hvac_unit_id)
         def get_or_create_sensor(sensor_type: str, unit: str):
@@ -95,7 +122,6 @@ def insert_mock_data():
                     lat=float(pilot_building.lat),
                     lon=float(pilot_building.lon),
                     rate_of_sampling=5.0,
-                    raw_data_id=0,
                     unit=unit,
                     room="101",
                     zone="A",

@@ -511,7 +511,7 @@ const checkIpfsHealth = async () => {
     const testResponse = await fetch(`${ipfsUrl.replace('/api/v0', '')}/api/v0/version`, {
       method: 'POST',
       headers: process.env.IPFS_AUTH_TOKEN ? {
-        'Authorization': `Basic ${process.env.IPFS_AUTH_TOKEN}`
+        'Authorization': `Bearer ${process.env.IPFS_AUTH_TOKEN}`
       } : {}
     });
     

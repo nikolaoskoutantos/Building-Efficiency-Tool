@@ -26,6 +26,18 @@ const routes = [
         meta: { requiresAuth: true },
         component: () => import('@/views/pages/efficiencytool.vue'),
       },
+      {
+        path: '/device-registration',
+        name: 'DeviceRegistration',
+        meta: { requiresAuth: true },
+        component: () => import('@/views/forms/DeviceRegistration.vue'),
+      },
+      {
+        path: '/settings',
+        name: 'Settings',
+        meta: { requiresAuth: true },
+        component: () => import('@/views/pages/Settings.vue'),
+      },
     ],
   },
   {

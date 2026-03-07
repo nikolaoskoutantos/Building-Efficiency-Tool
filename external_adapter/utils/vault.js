@@ -241,6 +241,13 @@ class VaultService {
 
     // 2) Encrypt streaming
     const cipherStream = this.encryptReadable(plaintextReadable, dek, chunkBytes);
+    // Debug: log stream errors and end
+    cipherStream.on('error', (err) => {
+      console.error('[DEBUG] cipherStream error:', err);
+    });
+    cipherStream.on('end', () => {
+      console.log('[DEBUG] cipherStream ended');
+    });
 
     // 3) Upload to IPFS - FIXED FOR FILEBASE
     let uploadUrl;

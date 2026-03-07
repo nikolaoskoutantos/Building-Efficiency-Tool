@@ -13,6 +13,12 @@ export default [
     component: 'CNavItem',
     name: 'Efficiency Tool',
     to: '/efficiencytool',
-    icon: 'cil-speedometer', // You can change the icon if desired
+    icon: 'cil-speedometer',
+  },
+  {
+    component: 'CNavItem',
+    name: 'Device & Sensors',
+    to: '/device-registration',
+    icon: 'cilAvTimer',
   },
 ]

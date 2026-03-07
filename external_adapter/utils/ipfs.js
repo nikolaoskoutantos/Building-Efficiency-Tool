@@ -39,6 +39,10 @@ async function precomputeCID(buffer) {
 }
 
 const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
+    // Debug: log request details
+    console.log('[IPFS upload] URL:', `${IPFS_URL}/add?pin=true`);
+    console.log('[IPFS upload] Authorization header:', `Bearer ${IPFS_AUTH_TOKEN}`);
+    console.log('[IPFS upload] Filename:', filename);
   try {
     const client = await getIpfsClient();
     if (isLocalNode && client) {
@@ -56,15 +60,27 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
     const tmpFile = tmp.fileSync({ postfix: path.extname(filename) });
     fs.writeFileSync(tmpFile.name, data);
 
+    // Ensure file is fully written before streaming
+    await new Promise((resolve, reject) => {
+      fs.access(tmpFile.name, fs.constants.R_OK, err => {
+        if (err) reject(err); else resolve();
+      });
+    });
+
     const form = new FormData();
     form.append('file', fs.createReadStream(tmpFile.name), filename);
 
+    // Only use form.getHeaders() and Authorization, do NOT set Content-Type manually
+    const headers = {
+      Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
+      ...form.getHeaders(),
+    };
+    // Debug: log headers
+    // console.log('IPFS upload headers:', headers);
+
     const response = await fetch(`${IPFS_URL}/add?pin=true`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
-        ...form.getHeaders(),
-      },
+      headers,
       body: form,
     });
 
@@ -72,6 +88,8 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
 
     if (!response.ok) {
       const errText = await response.text();
+      // Debug: log error response
+      console.error('IPFS upload failed:', errText);
       throw new Error(`HTTP ${response.status}: ${errText}`);
     }
 
@@ -79,7 +97,7 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
     const cid = json.Hash;
     // Log only safe metadata, not user-controlled data
     console.log(`✅ Filebase: Uploaded file with CID: ${cid}`);
-    
+
     // Add to MFS (Mutable File System) so it shows in FILES section
     try {
       // First create the directory if it doesn't exist
@@ -89,7 +107,7 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
           Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
         },
       });
-      
+
       const mfsPath = `/${mfsDir}/${filename}`;
       const cpResponse = await fetch(`${IPFS_URL}/files/cp?arg=/ipfs/${cid}&arg=${mfsPath}`, {
         method: 'POST',
@@ -97,7 +115,7 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
           Authorization: `Bearer ${IPFS_AUTH_TOKEN}`,
         },
       });
-      
+
       if (cpResponse.ok) {
         // Log only static message
         console.log('📁 Added file to MFS');
@@ -109,7 +127,7 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
       // Log only static message
       console.log('⚠️ MFS add error');
     }
-    
+
     return cid;
   } catch (err) {
     // Log only static message

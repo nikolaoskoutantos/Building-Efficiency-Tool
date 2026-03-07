@@ -13,7 +13,7 @@ import hashlib
 import logging
 from utils.rate_limit import rate_limit_dependency
 from db.connection import SessionLocal
-from models.hvac_models import User, UserBuilding
+from models.hvac_models import User, UserBuilding, Building
 from db.connection import get_db
 from models.hvac_unit import HVACUnit
 import bcrypt
@@ -105,6 +105,31 @@ class LoginRequest(BaseModel):
     signature: Optional[str] = None
     nonce: Optional[str] = None
     address: Optional[str] = None
+
+
+class RegisterRequest(BaseModel):
+    wallet_address: str
+    
+    # Option 1: Map to existing building
+    building_id: Optional[int] = None
+    
+    # Option 2: Create new building and map
+    building_name: Optional[str] = None
+    building_address: Optional[str] = None
+    building_lat: Optional[str] = None
+    building_lon: Optional[str] = None
+    building_did: Optional[str] = None
+    
+    # User role for the mapping
+    role: Optional[str] = "occupant"
+
+
+class RegisterResponse(BaseModel):
+    success: bool
+    message: str
+    user_id: Optional[int] = None
+    building_id: Optional[int] = None
+    building_created: Optional[bool] = False
 
 
 def get_db():
@@ -436,3 +461,185 @@ def get_current_user(request: Request):
                 pass
     
     raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+# Helper functions to reduce cognitive complexity
+def _validate_registration_request(data: RegisterRequest) -> None:
+    """Validate registration request data."""
+    # Validate wallet address format
+    if not data.wallet_address.startswith("0x") or len(data.wallet_address) != 42:
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid wallet address format. Must be 42-character hex string starting with '0x'"
+        )
+    
+    # Validate that either building_id OR building creation fields are provided
+    if data.building_id is None and not data.building_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Either 'building_id' (existing building) or 'building_name' (new building) must be provided"
+        )
+    
+    if data.building_id is not None and data.building_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'building_id' OR building creation fields, not both"
+        )
+    
+    # Validate role
+    valid_roles = ["occupant", "building_manager", "admin", "device", "user"]
+    if data.role not in valid_roles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}"
+        )
+
+def _resolve_or_create_building(data: RegisterRequest, db_session: Session) -> tuple[Building, bool]:
+    """Resolve existing building or create new one. Returns (building, was_created)."""
+    # Case 1: Map to existing building
+    if data.building_id is not None:
+        building = db_session.query(Building).filter(Building.id == data.building_id).first()
+        if not building:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Building with ID {data.building_id} not found"
+            )
+        logger.info(f"Using existing building: {building.name} (ID: {building.id})")
+        return building, False
+    
+    # Case 2: Create new building
+    building_did = data.building_did or f"0x{hashlib.sha256(data.building_name.encode()).hexdigest()[:10]}"
+    
+    # Check if building with same DID already exists
+    existing_building = db_session.query(Building).filter(Building.did == building_did).first()
+    if existing_building:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Building with DID {building_did} already exists"
+        )
+    
+    # Create new building
+    building = Building(
+        did=building_did,
+        name=data.building_name,
+        address=data.building_address or "",
+        lat=data.building_lat or "0.0",
+        lon=data.building_lon or "0.0"
+    )
+    db_session.add(building)
+    db_session.commit()
+    db_session.refresh(building)
+    logger.info(f"Created new building: {building.name} (ID: {building.id})")
+    return building, True
+
+def _resolve_or_create_user(wallet_address: str, db_session: Session) -> User:
+    """Resolve existing user or create new one."""
+    user = db_session.query(User).filter(User.wallet_address == wallet_address).first()
+    if user:
+        logger.info(f"User with wallet {wallet_address} already exists (ID: {user.id})")
+        return user
+    
+    # Create new user
+    user = User(wallet_address=wallet_address)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    logger.info(f"Created new user with wallet {wallet_address} (ID: {user.id})")
+    return user
+
+def _handle_user_building_mapping(
+    user: User, building: Building, role: str, building_created: bool, db_session: Session
+) -> RegisterResponse:
+    """Handle user-building mapping logic."""
+    # Check if user-building mapping already exists
+    existing_mapping = db_session.query(UserBuilding).filter(
+        UserBuilding.user_id == user.id,
+        UserBuilding.building_id == building.id
+    ).first()
+    
+    if existing_mapping:
+        if existing_mapping.status == "active":
+            return RegisterResponse(
+                success=False,
+                message=f"User is already registered for building {building.id} ({building.name}) with role '{existing_mapping.role}'",
+                user_id=user.id,
+                building_id=building.id,
+                building_created=building_created
+            )
+        else:
+            # Reactivate existing mapping
+            existing_mapping.status = "active"
+            existing_mapping.role = role
+            db_session.commit()
+            return RegisterResponse(
+                success=True,
+                message=f"Successfully reactivated user registration for building {building.id} ({building.name}) with role '{role}'",
+                user_id=user.id,
+                building_id=building.id,
+                building_created=building_created
+            )
+    else:
+        # Create new user-building mapping
+        user_building = UserBuilding(
+            user_id=user.id,
+            building_id=building.id,
+            role=role,
+            status="active"
+        )
+        db_session.add(user_building)
+        db_session.commit()
+        
+        success_message = f"Successfully registered wallet {user.wallet_address} for building {building.id} ({building.name}) with role '{role}'"
+        if building_created:
+            success_message += " (new building created)"
+            
+        return RegisterResponse(
+            success=True,
+            message=success_message,
+            user_id=user.id,
+            building_id=building.id,
+            building_created=building_created
+        )
+
+@router.post(
+    "/register",
+    responses={
+        200: {"description": "User registered successfully"},
+        400: {"description": "Invalid request data or building not found"},
+        409: {"description": "User already registered for this building"},
+        500: {"description": "Internal server error during registration"}
+    },
+    tags=["Device & User Authentication"]
+)
+def register_user(
+    data: RegisterRequest,
+    db_session: DbSession
+) -> RegisterResponse:
+    """
+    Register a wallet address to a building with a specified role.
+    Can either map to existing building or create new building.
+    
+    Args:
+        data: Registration request containing wallet_address and either:
+              - building_id (to map to existing building), OR
+              - building creation fields (to create new building and map)
+        
+    Returns:
+        RegisterResponse with success status and details
+    """
+    try:
+        _validate_registration_request(data)
+        building, building_created = _resolve_or_create_building(data, db_session)
+        user = _resolve_or_create_user(data.wallet_address, db_session)
+        return _handle_user_building_mapping(user, building, data.role, building_created, db_session)
+            
+    except HTTPException as e:
+        logger.warning(f"Registration failed: {e.detail}")
+        raise
+    except Exception as e:
+        logger.error(f"Registration error: {str(e)}")
+        db_session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during registration"
+        )

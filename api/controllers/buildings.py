@@ -13,11 +13,13 @@ router = APIRouter(prefix="/buildings", tags=["Buildings"])
 class BuildingCreate(BaseModel):
     name: str
     address: Optional[str] = None
+    lat: Optional[str] = None
+    lon: Optional[str] = None
 
 class BuildingRead(BuildingCreate):
     id: int
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 def get_db():
     db = SessionLocal()

@@ -89,3 +89,37 @@ LEFT JOIN public.hvac_schedule_intervals hi
       AND ts.ts <  (hi.end_ts   AT TIME ZONE 'UTC')::timestamp
 ORDER BY ts.ts, s.id;
 $$;
+
+
+
+
+CREATE OR REPLACE FUNCTION public.aggregate_sensor_data_5m(p_from timestamptz, p_to timestamptz)
+RETURNS void
+LANGUAGE sql
+AS $$
+INSERT INTO public.sensor_data (sensor_id, "timestamp", value, measurement_type, unit)
+SELECT
+  r.sensor_id,
+  date_bin(interval '5 minutes', r."timestamp", timestamptz '1970-01-01 00:00:00+00') AS bucket_start,
+  avg(r.value)::double precision AS value,
+  r.measurement_type,
+  max(r.unit) AS unit
+FROM public.sensor_data_raw r
+WHERE r."timestamp" >= p_from
+  AND r."timestamp" <  p_to
+  AND r.value IS NOT NULL
+GROUP BY r.sensor_id, r.measurement_type, bucket_start
+ON CONFLICT (sensor_id, measurement_type, "timestamp")
+DO UPDATE SET
+  value = EXCLUDED.value,
+  unit  = EXCLUDED.unit;
+$$;
+
+CREATE OR REPLACE FUNCTION public.run_aggregate_sensor_data_5m()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM public.aggregate_sensor_data_5m(now() - interval '15 minutes', now());
+END;
+$$;

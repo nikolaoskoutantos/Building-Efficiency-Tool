@@ -6,23 +6,17 @@ import { useColorModes } from '@coreui/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import { useSidebarStore } from '@/stores/sidebar.js'
-import { useAppKit } from '@reown/appkit/vue'
 import Alerts from '@/components/Alerts.vue'
 
 import AppBreadcrumb from '@/components/AppBreadcrumb.vue'
 import AppHeaderDropdownAccnt from '@/components/AppHeaderDropdownAccnt.vue'
-import { useDisconnect } from '@reown/appkit/vue'
-import { COffcanvas, COffcanvasHeader, COffcanvasTitle, COffcanvasBody, CListGroup, CListGroupItem, CButton } from '@coreui/vue'
-import { useAlertsStore } from '@/stores/alerts.js'
 
 const headerClassNames = ref('mb-4 p-0')
 const { colorMode, setColorMode } = useColorModes('coreui-free-vue-admin-template-theme')
 const sidebar = useSidebarStore()
 const auth = useAuthStore()
 const router = useRouter()
-const appkit = useAppKit()
 const showAlerts = ref(false)
-const alertsStore = useAlertsStore()
 
 onMounted(() => {
   document.addEventListener('scroll', () => {
@@ -32,7 +26,6 @@ onMounted(() => {
   })
 })
 
-const { disconnect } = useDisconnect()
 const showLeaderboard = ref(false);
 
 function onShowLeaderboard(event) {
@@ -71,6 +64,11 @@ function onShowAlerts(event) {
   showAlerts.value = true;
 }
 
+function navigateToSettings(event) {
+  if (event && event.preventDefault) event.preventDefault();
+  router.push('/settings');
+}
+
 
 </script>
 
@@ -91,7 +89,7 @@ function onShowAlerts(event) {
           <CNavLink href="#">Users</CNavLink>
         </CNavItem>
         <CNavItem>
-          <CNavLink href="#">Settings</CNavLink>
+          <CNavLink href="#" @click="navigateToSettings">Settings</CNavLink>
         </CNavItem>
       </CHeaderNav>
       <CHeaderNav class="ms-auto">
@@ -110,9 +108,9 @@ function onShowAlerts(event) {
         </CNavItem>
       </CHeaderNav>
       <CHeaderNav>
-        <li class="nav-item py-1">
+        <div class="nav-item py-1">
           <div class="vr h-100 mx-2 text-body text-opacity-75"></div>
-        </li>
+        </div>
         <CDropdown variant="nav-item" placement="bottom-end">
           <CDropdownToggle :caret="false">
             <CIcon v-if="colorMode === 'dark'" icon="cil-moon" size="lg" />
@@ -149,9 +147,9 @@ function onShowAlerts(event) {
             </CDropdownItem>
           </CDropdownMenu>
         </CDropdown>
-        <li class="nav-item py-1">
+        <div class="nav-item py-1">
           <div class="vr h-100 mx-2 text-body text-opacity-75"></div>
-        </li>
+        </div>
         <AppHeaderDropdownAccnt @logout="logout" />
       </CHeaderNav>
     </CContainer>

@@ -35,6 +35,10 @@ async function handleLogout() {
     await router.push('/login')
   }
 }
+
+function navigateToSettings() {
+  router.push('/settings')
+}
 </script>
 
 <template>
@@ -65,7 +69,7 @@ async function handleLogout() {
         <CIcon icon="cil-user" />
         <span class="ms-2">{{ auth.walletAddress ? auth.walletAddress : 'No Wallet Connected' }}</span>
       </CDropdownItem>
-      <CDropdownItem>
+      <CDropdownItem @click="navigateToSettings">
         <CIcon icon="cil-settings" /> Settings
       </CDropdownItem>
       <CDropdownDivider />

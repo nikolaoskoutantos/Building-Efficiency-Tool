@@ -28,12 +28,18 @@ class WeatherData(Base):
 class SensorData(Base):
     __tablename__ = "sensor_data"
 
+    __table_args__ = (
+        UniqueConstraint("sensor_id", "measurement_type", "timestamp",
+                         name="ux_sensor_data_sensor_type_bucket"),
+        Index("ix_sensor_data_sensor_type_ts", "sensor_id", "measurement_type", "timestamp"),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     sensor_id = Column(Integer, ForeignKey(SENSORS_ID_FK), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     value = Column(Float, nullable=False)
-    measurement_type = Column(String(50), nullable=False, default='temperature')
-    unit = Column(String(20), default='celsius')
+    measurement_type = Column(String(50), nullable=False, default="temperature")
+    unit = Column(String(20), default="celsius")
 
 class HVACSensorData(Base):
     __tablename__ = "hvac_sensor_data"

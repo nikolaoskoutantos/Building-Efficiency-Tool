@@ -34,6 +34,7 @@
     "@reown/appkit": "^1.7.9",
     "@reown/appkit-adapter-ethers": "^1.7.9",
     "@reown/appkit-adapter-ethers5": "^1.7.9",
+    "axios": "^1.13.6",
     "chart.js": "^4.4.7",
     "element-plus": "^2.10.4",
     "ethers": "^5.8.0",

@@ -1,6 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Annotated
+from typing import Annotated, Optional
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.sensor import Sensor
@@ -14,14 +14,33 @@ router = APIRouter(prefix="/sensors", tags=["Sensors"])
 
 # Pydantic schemas
 class SensorBase(BaseModel):
+    building_id: int
+    hvac_unit_id: Optional[int] = None
+    type: Optional[str] = None
     lat: float
     lon: float
-    rate_of_sampling: float
-    raw_data_id: int
+    rate_of_sampling: Optional[float] = 5.0  # Default 5 seconds
     unit: str
+    room: Optional[str] = None
+    zone: Optional[str] = None
+    central_unit: Optional[str] = None
+    payload_path: Optional[str] = None
 
 class SensorCreate(SensorBase):
     pass
+
+class SensorUpdate(BaseModel):
+    building_id: Optional[int] = None
+    hvac_unit_id: Optional[int] = None
+    type: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    rate_of_sampling: Optional[float] = None
+    unit: Optional[str] = None
+    room: Optional[str] = None
+    zone: Optional[str] = None
+    central_unit: Optional[str] = None
+    payload_path: Optional[str] = None
 
 class SensorRead(SensorBase):
     id: int
@@ -41,7 +60,7 @@ def get_db():
     responses={404: {"description": "Sensor not found"}}
 )
 def create_sensor(sensor: SensorCreate, db: Annotated[Session, Depends(get_db)]):
-    db_sensor = Sensor(**sensor.dict())
+    db_sensor = Sensor(**sensor.model_dump())
     db.add(db_sensor)
     db.commit()
     db.refresh(db_sensor)
@@ -70,11 +89,11 @@ def read_sensor(sensor_id: int, db: Annotated[Session, Depends(get_db)]):
     response_model=SensorRead,
     responses={404: {"description": "Sensor not found"}}
 )
-def update_sensor(sensor_id: int, sensor: SensorCreate, db: Annotated[Session, Depends(get_db)]):
+def update_sensor(sensor_id: int, sensor: SensorUpdate, db: Annotated[Session, Depends(get_db)]):
     db_sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
     if not db_sensor:
         raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
-    for key, value in sensor.dict().items():
+    for key, value in sensor.model_dump(exclude_unset=True).items():
         setattr(db_sensor, key, value)
     db.commit()
     db.refresh(db_sensor)
