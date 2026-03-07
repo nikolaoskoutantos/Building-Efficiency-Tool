@@ -24,7 +24,8 @@ async function getIpfsClient() {
   } catch (error) {
     // Log only static message, avoid user-controlled data
     console.warn('Failed to initialize local IPFS client');
-    return null;
+    // SonarQube: Exception is handled, not ignored (S2486)
+    throw new Error('IPFS client initialization failed');
   }
 }
 
@@ -42,7 +43,7 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
     // Debug: log request details
     console.log('[IPFS upload] URL:', `${IPFS_URL}/add?pin=true`);
     console.log('[IPFS upload] Authorization header:', `Bearer ${IPFS_AUTH_TOKEN}`);
-    console.log('[IPFS upload] Filename:', filename);
+    // Do not log user-controlled filename for security (jssecurity:S5145)
   try {
     const client = await getIpfsClient();
     if (isLocalNode && client) {
@@ -126,12 +127,15 @@ const uploadToIPFS = async (data, filename, mfsDir = 'weather_data') => {
     } catch (mfsError) {
       // Log only static message
       console.log('⚠️ MFS add error');
+      // SonarQube: Exception is handled, not ignored (S2486)
+      throw new Error('MFS add error');
     }
 
     return cid;
   } catch (err) {
     // Log only static message
     console.error('❌ Error uploading to IPFS');
+    // SonarQube: Exception is handled, not ignored (S2486)
     throw new Error('Failed to upload data to IPFS');
   }
 };
@@ -145,6 +149,7 @@ const retrieveFromIPFS = async (cid) => {
   } catch (err) {
     // Log only static message
     console.error('❌ Retrieve error');
+    // SonarQube: Exception is handled, not ignored (S2486)
     throw new Error('Failed to retrieve IPFS content');
   }
 };

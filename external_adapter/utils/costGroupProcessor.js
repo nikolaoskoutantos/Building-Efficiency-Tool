@@ -126,7 +126,9 @@ const handleCostGroupRequest = async (req, res) => {
     }
 
     // Step 5: Upload to IPFS
-    const filename = `cost_group_${query_type}_${Date.now()}.${output_format}`;
+    // Sanitize query_type for safe filename usage (jssecurity:S5145, javascript:S6353)
+    const safeQueryType = String(query_type).replaceAll(/\W/g, '_');
+    const filename = `cost_group_${safeQueryType}_${Date.now()}.${output_format}`;
     const cid = await uploadToIPFS(finalContent, filename, 'cost_groups');
 
     // Return success response
