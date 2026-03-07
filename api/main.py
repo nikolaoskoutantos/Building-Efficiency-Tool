@@ -64,6 +64,8 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
 def get_cors_origins():
     """Get CORS allowed origins from environment variables."""
     # Default development origins
+    # SECURITY NOTE: http:// origins are only used for local development (DEV mode).
+    # In production, all origins must use https:// to avoid clear-text protocol risks (SonarQube python:S5332).
     default_origins = [
         "http://localhost:3000",   # Vue.js dev server
         "http://localhost:5173",   # Vite dev server
