@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
 
   traefik:
@@ -38,9 +36,9 @@ services:
 
     labels:
       - traefik.enable=true
-
       - traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth
       - traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email
 
 
   ui:
@@ -60,9 +58,11 @@ services:
       - traefik.http.routers.ui.rule=Host(`benet.nkoutantos.com`)
       - traefik.http.routers.ui.entrypoints=websecure
       - traefik.http.routers.ui.tls.certresolver=le
-      - traefik.http.services.ui.loadbalancer.server.port=5173
+      - traefik.http.services.ui.loadbalancer.server.port=3000
     ports:
       - "3000:3000"
+
+
   api:
     build: .
     container_name: qoe-api
@@ -147,7 +147,6 @@ services:
       - traefik.http.routers.portainer.rule=Host(`qoe-portainer.nkoutantos.com`)
       - traefik.http.routers.portainer.entrypoints=websecure
       - traefik.http.routers.portainer.tls.certresolver=le
-      # Authelia middleware removed; Portainer uses its own authentication
       - traefik.http.services.portainer.loadbalancer.server.port=9000
     ports:
       - "9000:9000"
@@ -178,12 +177,10 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxy
-
       - traefik.http.routers.emqx.rule=Host(`mqtt.nkoutantos.com`)
       - traefik.http.routers.emqx.entrypoints=websecure
       - traefik.http.routers.emqx.tls.certresolver=le
       - traefik.http.services.emqx.loadbalancer.server.port=18083
-
       - traefik.tcp.routers.emqx-mqtt.rule=HostSNI(`*`)
       - traefik.tcp.routers.emqx-mqtt.entrypoints=mqtt
       - traefik.tcp.services.emqx-mqtt.loadbalancer.server.port=1883
@@ -215,6 +212,8 @@ services:
       - traefik.http.routers.authelia.entrypoints=websecure
       - traefik.http.routers.authelia.tls.certresolver=le
       - traefik.http.services.authelia.loadbalancer.server.port=9091
+
+
   redis:
     image: redis:7-alpine
     container_name: qoe-redis
