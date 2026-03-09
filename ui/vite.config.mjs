@@ -34,6 +34,11 @@ export default defineConfig(() => {
     },
     server: {
       port: 3000,
+      allowedHosts: [
+        'benet.nkoutantos.com',
+        'localhost',
+        '127.0.0.1'
+      ],
       proxy: {
         // https://vitejs.dev/config/server-options.html
       },
