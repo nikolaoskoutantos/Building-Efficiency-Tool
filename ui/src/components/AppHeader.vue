@@ -86,9 +86,6 @@ function navigateToSettings(event) {
           <CNavLink href="/dashboard"> Dashboard </CNavLink>
         </CNavItem>
         <CNavItem>
-          <CNavLink href="#">Users</CNavLink>
-        </CNavItem>
-        <CNavItem>
           <CNavLink href="#" @click="navigateToSettings">Settings</CNavLink>
         </CNavItem>
       </CHeaderNav>

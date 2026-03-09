@@ -1,46 +1,108 @@
-version: '3.8'
+version: "3.8"
+
 services:
+
+  traefik:
+    image: traefik:v2.10
+    container_name: qoe-traefik
+    restart: unless-stopped
+    env_file:
+      - .env
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.mqtt.address=:1883
+
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "1883:1883"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+
+    networks:
+      - proxy
+
+    labels:
+      - traefik.enable=true
+
+      - traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth
+      - traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true
+
+
+  ui:
+    image: node:18
+    container_name: qoe-ui
+    working_dir: /app
+    volumes:
+      - ../ui:/app
+    command: sh -c "npm install --legacy-peer-deps && npm run dev -- --host"
+    env_file:
+      - ../ui/.env
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.ui.rule=Host(`benet.nkoutantos.com`)
+      - traefik.http.routers.ui.entrypoints=websecure
+      - traefik.http.routers.ui.tls.certresolver=le
+      - traefik.http.services.ui.loadbalancer.server.port=5173
+    ports:
+      - "3000:3000"
   api:
     build: .
     container_name: qoe-api
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - DEV=${DEV}
-      - POSTGRES_HOST=db
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+    restart: unless-stopped
+    env_file:
+      - .env
+
     depends_on:
       - db
+
     command: uvicorn main:app --host 0.0.0.0 --port 8000
+
     volumes:
       - .:/app
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-  db:
-    image: postgres:15
-    container_name: qoe-db
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+
+    networks:
+      - proxy
+      - internal
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.api.rule=Host(`qoe-api.nkoutantos.com`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls.certresolver=le
+      - traefik.http.services.api.loadbalancer.server.port=8000
     ports:
-      - "5444:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-     # - ./db/update_function.sql:/docker-entrypoint-initdb.d/update_function.sql
+      - "8000:8000"
+
+
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.9.0
-    ports: ["5000:5000"]
+    container_name: qoe-mlflow
+    restart: unless-stopped
+    env_file:
+      - .env
+
     volumes:
       - mlflow-artifacts:/mlflow
+
     command: >
       mlflow server
       --host 0.0.0.0
@@ -48,29 +110,150 @@ services:
       --backend-store-uri sqlite:////mlflow/mlflow.db
       --artifacts-destination /mlflow/artifacts
       --serve-artifacts
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+
+    networks:
+      - proxy
+      - internal
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.mlflow.rule=Host(`mlflow.nkoutantos.com`)
+      - traefik.http.routers.mlflow.entrypoints=websecure
+      - traefik.http.routers.mlflow.tls.certresolver=le
+      - traefik.http.routers.mlflow.middlewares=authelia@docker
+      - traefik.http.services.mlflow.loadbalancer.server.port=5000
+    ports:
+      - "5000:5000"
+
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: qoe-portainer
+    restart: unless-stopped
+
+    command: -H unix:///var/run/docker.sock
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+
+    networks:
+      - proxy
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.portainer.rule=Host(`qoe-portainer.nkoutantos.com`)
+      - traefik.http.routers.portainer.entrypoints=websecure
+      - traefik.http.routers.portainer.tls.certresolver=le
+      # Authelia middleware removed; Portainer uses its own authentication
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
+    ports:
+      - "9000:9000"
+
+
   emqx:
     image: emqx/emqx:5.8.5
     container_name: qoe-emqx
+    restart: unless-stopped
+
     depends_on:
       - api
-    ports:
-      - "1883:1883"
-      - "18083:18083"
+
     environment:
-      - EMQX_DASHBOARD__DEFAULT_USERNAME=${EMQX_DASHBOARD_USER}
-      - EMQX_DASHBOARD__DEFAULT_PASSWORD=${EMQX_DASHBOARD_PASS}
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASHBOARD_USER}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASS}
+
     volumes:
       - emqx-data:/opt/emqx/data
       - emqx-log:/opt/emqx/log
+    ports:
+      - "18083:18083"
+
+    networks:
+      - proxy
+      - internal
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+
+      - traefik.http.routers.emqx.rule=Host(`mqtt.nkoutantos.com`)
+      - traefik.http.routers.emqx.entrypoints=websecure
+      - traefik.http.routers.emqx.tls.certresolver=le
+      - traefik.http.services.emqx.loadbalancer.server.port=18083
+
+      - traefik.tcp.routers.emqx-mqtt.rule=HostSNI(`*`)
+      - traefik.tcp.routers.emqx-mqtt.entrypoints=mqtt
+      - traefik.tcp.services.emqx-mqtt.loadbalancer.server.port=1883
+
+
+  authelia:
+    image: authelia/authelia:latest
+    container_name: qoe-authelia
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: authelia --config /config/configuration.yml
+
+    depends_on:
+      - redis
+
+    volumes:
+      - ./authelia/config:/config
+    ports:
+      - "9091:9091"
+
+    networks:
+      - proxy
+      - internal
+
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.authelia.rule=Host(`auth.nkoutantos.com`)
+      - traefik.http.routers.authelia.entrypoints=websecure
+      - traefik.http.routers.authelia.tls.certresolver=le
+      - traefik.http.services.authelia.loadbalancer.server.port=9091
+  redis:
+    image: redis:7-alpine
+    container_name: qoe-redis
+    restart: unless-stopped
+
+    volumes:
+      - redis-data:/data
+
+    networks:
+      - internal
+
+
+  db:
+    image: postgres:15
+    container_name: qoe-db
+    restart: unless-stopped
+    env_file:
+      - .env
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    ports:
+      - "5444:5432"
+
+    networks:
+      - internal
 
 
 volumes:
+  traefik-letsencrypt:
   pgdata:
   mlflow-artifacts:
+  redis-data:
   emqx-data:
   emqx-log:
+  portainer-data:
+
+
+networks:
+  proxy:
+  internal:

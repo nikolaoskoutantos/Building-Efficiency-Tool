@@ -1,4 +1,7 @@
+USER_NOT_FOUND_DESC = "User not found."
 from fastapi import APIRouter, HTTPException, Depends, status
+from utils.auth_dependencies import get_current_user_role
+from utils.policies import has_permission
 from typing import Annotated, Optional, List
 import uuid
 import secrets
@@ -99,13 +102,16 @@ class SensorBulkAddRequest(BaseModel):
     response_model=List[DeviceListResponse],
     responses={
         401: {"description": UNAUTHORIZED_DESC},
+        403: {"description": UNAUTHORIZED_DESC},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
 )
-def list_devices(db: Annotated[Session, Depends(get_db)]):
-    """Get all registered HVAC devices with real sensor counts"""
+def list_devices(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
+    """Get all registered HVAC devices with real sensor counts (auth required)"""
     try:
-        # Query devices with sensor counts using a subquery
         sensor_count_subquery = (
             db.query(
                 Sensor.hvac_unit_id,
@@ -114,7 +120,6 @@ def list_devices(db: Annotated[Session, Depends(get_db)]):
             .group_by(Sensor.hvac_unit_id)
             .subquery()
         )
-        
         # Main query joining devices, buildings, and sensor counts
         devices_query = (
             db.query(
@@ -203,7 +208,8 @@ def get_device_sensors(device_id: int, db: Annotated[Session, Depends(get_db)]):
 )
 def add_sensors_to_device(
     req: SensorBulkAddRequest,
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Add multiple sensors to an existing HVAC device"""
     # Verify device exists
@@ -214,6 +220,12 @@ def add_sensors_to_device(
     # Add sensors
     sensors_added = 0
     for s in req.sensors:
+        from models.hvac_models import User
+        user_obj = db.query(User).filter(User.wallet_address == user["user_id"]).first()
+        if not user_obj:
+            raise HTTPException(status_code=401, detail=USER_NOT_FOUND_DESC)
+        if not has_permission(user_obj.id, "building", hvac_unit.building_id, db):
+            raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
         sensor = Sensor(
             building_id=hvac_unit.building_id,
             hvac_unit_id=hvac_unit.id,
@@ -248,7 +260,8 @@ def add_sensors_to_device(
 )
 def register_device(
     req: DeviceRegistrationRequest,
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     device_key = str(uuid.uuid4())
     device_secret = secrets.token_urlsafe(48)
@@ -271,6 +284,12 @@ def register_device(
 
     if req.sensors:
         for s in req.sensors:
+            from models.hvac_models import User
+            user_obj = db.query(User).filter(User.wallet_address == user["user_id"]).first()
+            if not user_obj:
+                raise HTTPException(status_code=401, detail=USER_NOT_FOUND_DESC)
+            if not has_permission(user_obj.id, "building", req.building_id, db):
+                raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
             sensor = Sensor(
                 building_id=req.building_id,
                 hvac_unit_id=hvac_unit.id,
@@ -301,7 +320,8 @@ def register_device(
 def update_device(
     hvac_unit_id: int,
     req: DeviceRegistrationRequest,
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Update an existing HVAC device and its sensors"""
     try:
@@ -346,6 +366,12 @@ def update_device(
         # Add new sensors if provided
         if req.sensors:
             for s in req.sensors:
+                from models.hvac_models import User
+                user_obj = db.query(User).filter(User.wallet_address == user["user_id"]).first()
+                if not user_obj:
+                    raise HTTPException(status_code=401, detail=USER_NOT_FOUND_DESC)
+                if not has_permission(user_obj.id, "building", req.building_id, db):
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
                 sensor = Sensor(
                     building_id=req.building_id,
                     hvac_unit_id=hvac_unit.id,

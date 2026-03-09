@@ -5,7 +5,12 @@ from sqlalchemy.orm import Session
 from db.connection import get_db
 from models.mqtt_config import MQTTBrokerConfig
 
-router = APIRouter(prefix="/mqtt", tags=["MQTT"])
+from utils.auth_dependencies import get_current_user_role
+router = APIRouter(
+    prefix="/mqtt",
+    tags=["MQTT"],
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+)
 
 # String constants to avoid duplication (SonarQube S1192)
 MQTT_CONFIG_NOT_FOUND = "MQTT configuration not found"
@@ -101,24 +106,31 @@ def get_mqtt_config(db: Annotated[Session, Depends(get_db)]):
     "/device/{device_id}/info",
     response_model=DeviceMQTTInfo,
     responses={
+        403: {"description": "Forbidden: User not authorized to access this device's MQTT info."},
         404: {"description": DEVICE_NOT_FOUND_DESC},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
 )
-def get_device_mqtt_info(device_id: int, db: Annotated[Session, Depends(get_db)]):
-    """Get MQTT publishing information for a specific device"""
+def get_device_mqtt_info(
+    device_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
+    """Get MQTT publishing information for a specific device (with permission check)"""
+    from utils.policies import has_permission
     try:
         # Get MQTT config
         config = db.query(MQTTBrokerConfig).filter(MQTTBrokerConfig.is_active == True).first()
         if not config:
             raise HTTPException(status_code=404, detail=MQTT_CONFIG_NOT_FOUND)
-        
         # Get device info
         from models.hvac_unit import HVACUnit
         device = db.query(HVACUnit).filter(HVACUnit.id == device_id).first()
         if not device:
             raise HTTPException(status_code=404, detail=DEVICE_NOT_FOUND)
-        
+        user_id = user.get("user_id")
+        if user_id is None or not has_permission(user_id, "device", device.id, db):
+            raise HTTPException(status_code=403, detail="You are not authorized to access this device's MQTT info.")
         return DeviceMQTTInfo(
             device_id=device.id,
             device_key=device.device_key,
@@ -136,24 +148,31 @@ def get_device_mqtt_info(device_id: int, db: Annotated[Session, Depends(get_db)]
     "/sensor/{sensor_id}/info",
     response_model=SensorMQTTInfo,
     responses={
+        403: {"description": "Forbidden: User not authorized to access this sensor's MQTT info."},
         404: {"description": SENSOR_NOT_FOUND_DESC},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
 )
-def get_sensor_mqtt_info(sensor_id: int, db: Annotated[Session, Depends(get_db)]):
-    """Get MQTT publishing information for a specific sensor"""
+def get_sensor_mqtt_info(
+    sensor_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
+    """Get MQTT publishing information for a specific sensor (with permission check)"""
+    from utils.policies import has_permission
     try:
         # Get sensor info
         from models.sensor import Sensor
         sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
         if not sensor:
             raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND)
-        
+        user_id = user.get("user_id")
+        if user_id is None or not has_permission(user_id, "sensor", sensor.id, db):
+            raise HTTPException(status_code=403, detail="You are not authorized to access this sensor's MQTT info.")
         # Get MQTT config
         config = db.query(MQTTBrokerConfig).filter(MQTTBrokerConfig.is_active == True).first()
         if not config:
             raise HTTPException(status_code=404, detail=MQTT_CONFIG_NOT_FOUND)
-        
         return SensorMQTTInfo(
             sensor_id=sensor.id,
             device_id=sensor.hvac_unit_id,
@@ -169,6 +188,7 @@ def get_sensor_mqtt_info(sensor_id: int, db: Annotated[Session, Depends(get_db)]
 @router.put(
     "/config",
     response_model=MQTTConfigResponse,
+    dependencies=[Depends(get_current_user_role(["ADMIN"]))],
     responses={
         400: {"description": INVALID_INPUT_DESC},
         404: {"description": MQTT_CONFIG_NOT_FOUND_DESC},
@@ -179,7 +199,7 @@ def update_mqtt_config(
     updates: MQTTConfigUpdate,
     db: Annotated[Session, Depends(get_db)]
 ):
-    """Update MQTT broker configuration"""
+    """Update MQTT broker configuration (ADMIN only)"""
     try:
         config = db.query(MQTTBrokerConfig).filter(MQTTBrokerConfig.is_active == True).first()
         if not config:

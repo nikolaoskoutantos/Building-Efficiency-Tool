@@ -14,7 +14,11 @@ import os
 from db import SessionLocal
 from models.hvac_models import User
 
-router = APIRouter(tags=["Users"])
+from utils.auth_dependencies import get_current_user_role
+router = APIRouter(
+    tags=["Users"],
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+)
 
 # Pydantic models for user settings
 class UserSettingsBase(BaseModel):
@@ -59,18 +63,19 @@ def get_db():
 )
 def get_user_settings(
     db: Annotated[Session, Depends(get_db)],
-    wallet_address: str = None
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Get user settings by wallet address"""
+    wallet_address = user.get("user_id")
     if not wallet_address:
         raise HTTPException(status_code=400, detail=WALLET_REQUIRED_ERROR)
-    user = db.query(User).filter(User.wallet_address == wallet_address).first()
-    if not user:
-        user = User(wallet_address=wallet_address)
-        db.add(user)
+    user_obj = db.query(User).filter(User.wallet_address == wallet_address).first()
+    if not user_obj:
+        user_obj = User(wallet_address=wallet_address)
+        db.add(user_obj)
         db.commit()
-        db.refresh(user)
-    return user
+        db.refresh(user_obj)
+    return user_obj
 
 @router.post(
     "/user/settings",
@@ -83,25 +88,26 @@ def get_user_settings(
 def save_user_settings(
     settings_data: UserSettingsCreate,
     db: Annotated[Session, Depends(get_db)],
-    wallet_address: str = None
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Save or update user settings"""
+    wallet_address = user.get("user_id")
     if not wallet_address:
         raise HTTPException(status_code=400, detail=WALLET_REQUIRED_ERROR)
-    user = db.query(User).filter(User.wallet_address == wallet_address).first()
-    if not user:
-        user = User(
+    user_obj = db.query(User).filter(User.wallet_address == wallet_address).first()
+    if not user_obj:
+        user_obj = User(
             wallet_address=wallet_address,
             **settings_data.dict(exclude_unset=True)
         )
-        db.add(user)
+        db.add(user_obj)
     else:
         for field, value in settings_data.dict(exclude_unset=True).items():
-            setattr(user, field, value)
-        user.updated_at = datetime.now(timezone.utc)
+            setattr(user_obj, field, value)
+        user_obj.updated_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(user)
-    return user
+    db.refresh(user_obj)
+    return user_obj
 
 @router.delete(
     "/user/settings",
@@ -112,22 +118,23 @@ def save_user_settings(
 )
 def delete_user_settings(
     db: Annotated[Session, Depends(get_db)],
-    wallet_address: str = None
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Delete user's personal data (GDPR right to be forgotten)"""
+    wallet_address = user.get("user_id")
     if not wallet_address:
         raise HTTPException(status_code=400, detail=WALLET_REQUIRED_ERROR)
-    user = db.query(User).filter(User.wallet_address == wallet_address).first()
-    if not user:
+    user_obj = db.query(User).filter(User.wallet_address == wallet_address).first()
+    if not user_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=USER_NOT_FOUND_ERROR
         )
-    user.phone = None
-    user.email = None
-    user.address = None
-    user.public_key = None
-    user.updated_at = datetime.now(timezone.utc)
+    user_obj.phone = None
+    user_obj.email = None
+    user_obj.address = None
+    user_obj.public_key = None
+    user_obj.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"message": "Personal data deleted successfully"}
 
@@ -141,29 +148,30 @@ def delete_user_settings(
 )
 def export_user_data(
     db: Annotated[Session, Depends(get_db)],
-    wallet_address: str = None
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Export all user data (GDPR data portability)"""
+    wallet_address = user.get("user_id")
     if not wallet_address:
         raise HTTPException(status_code=400, detail=WALLET_REQUIRED_ERROR)
-    user = db.query(User).filter(User.wallet_address == wallet_address).first()
-    if not user:
+    user_obj = db.query(User).filter(User.wallet_address == wallet_address).first()
+    if not user_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=USER_NOT_FOUND_ERROR
         )
     export_data = {
         "user_data": {
-            "wallet_address": user.wallet_address,
-            "phone": user.phone,
-            "email": user.email,
-            "address": user.address,
-            "default_building_id": user.default_building_id,
-            "public_key": user.public_key,
-            "api_base_url": user.api_base_url,
-            "created_at": user.created_at.isoformat() if user.created_at else None,
-            "updated_at": user.updated_at.isoformat() if user.updated_at else None,
-            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "wallet_address": user_obj.wallet_address,
+            "phone": user_obj.phone,
+            "email": user_obj.email,
+            "address": user_obj.address,
+            "default_building_id": user_obj.default_building_id,
+            "public_key": user_obj.public_key,
+            "api_base_url": user_obj.api_base_url,
+            "created_at": user_obj.created_at.isoformat() if user_obj.created_at else None,
+            "updated_at": user_obj.updated_at.isoformat() if user_obj.updated_at else None,
+            "last_login": user_obj.last_login.isoformat() if user_obj.last_login else None,
         },
         "export_date": datetime.now(timezone.utc).isoformat(),
         "format_version": "1.0"

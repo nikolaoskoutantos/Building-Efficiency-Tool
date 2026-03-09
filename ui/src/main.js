@@ -46,16 +46,8 @@ app.component('DocsIcons', DocsIcons)
 // Initialize auth store and JWT token validation
 import { useAuthStore } from './stores/auth'
 
-// Initialize auth store before mounting the app
-const initializeApp = async () => {
-  const authStore = useAuthStore(pinia)
-  
-  // Wait for auth initialization to complete
-  await authStore.initializeAuth()
-  
-  // Now mount the app after auth is initialized
-  app.mount('#app')
-}
-
-// Initialize the app
-initializeApp()
+// Top-level await for app initialization
+const authStore = useAuthStore(pinia)
+globalThis.$authStore = authStore
+await authStore.initializeAuth()
+app.mount('#app')

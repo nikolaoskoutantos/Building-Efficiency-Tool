@@ -1,64 +1,44 @@
-from fastapi import Request, HTTPException, status
-import jwt
-import os
+from sqlalchemy.orm import Session
+from models.hvac_models import UserBuilding
+from models.hvac_unit import HVACUnit
+from models.sensor import Sensor
 
-# Constants
-JWT_SECRET = os.getenv("SESSION_SECRET_KEY", "your-secret-key")
-JWT_ALGORITHM = "HS256"
-AUTH_TYPE = os.getenv("AUTH_TYPE", "cookie")
 
-# Error messages
-ERROR_NOT_AUTHENTICATED = "Not authenticated"
-ERROR_INVALID_TOKEN = "Invalid or expired token"
-BEARER_PREFIX = "Bearer "
+def has_permission(user_id: int, resource_type: str, resource_id: int, db: Session) -> bool:
+    """
+    Checks if the user has permission to access the given resource (device/sensor/building).
+    Uses a single JOIN query instead of two sequential queries.
+    Returns True if allowed, False otherwise.
+    """
+    if resource_type == "building":
+        return (
+            db.query(UserBuilding)
+            .filter_by(user_id=user_id, building_id=resource_id, status="active")
+            .first() is not None
+        )
 
-def require_admin(request: Request):
-    if AUTH_TYPE == "cookie":
-        role = request.session.get("role")
-        if role != "admin":
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
-    elif AUTH_TYPE == "jwt":
-        token = request.headers.get("Authorization")
-        if not token or not token.startswith(BEARER_PREFIX):
-            raise HTTPException(status_code=401, detail=ERROR_NOT_AUTHENTICATED)
-        token = token[7:]
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            if payload.get("role") != "admin":
-                raise HTTPException(status_code=403, detail="Admin access required")
-        except Exception:
-            raise HTTPException(status_code=401, detail=ERROR_INVALID_TOKEN)
+    elif resource_type == "device":
+        return (
+            db.query(UserBuilding)
+            .join(HVACUnit, HVACUnit.building_id == UserBuilding.building_id)
+            .filter(
+                HVACUnit.id == resource_id,
+                UserBuilding.user_id == user_id,
+                UserBuilding.status == "active",
+            )
+            .first() is not None
+        )
 
-def require_building_manager(request: Request):
-    if AUTH_TYPE == "cookie":
-        role = request.session.get("role")
-        if role != "building_manager":
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Building manager access required.")
-    elif AUTH_TYPE == "jwt":
-        token = request.headers.get("Authorization")
-        if not token or not token.startswith(BEARER_PREFIX):
-            raise HTTPException(status_code=401, detail=ERROR_NOT_AUTHENTICATED)
-        token = token[7:]
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            if payload.get("role") != "building_manager":
-                raise HTTPException(status_code=403, detail="Building manager access required")
-        except Exception:
-            raise HTTPException(status_code=401, detail=ERROR_INVALID_TOKEN)
+    elif resource_type == "sensor":
+        return (
+            db.query(UserBuilding)
+            .join(Sensor, Sensor.building_id == UserBuilding.building_id)
+            .filter(
+                Sensor.id == resource_id,
+                UserBuilding.user_id == user_id,
+                UserBuilding.status == "active",
+            )
+            .first() is not None
+        )
 
-def require_other(request: Request):
-    if AUTH_TYPE == "cookie":
-        role = request.session.get("role")
-        if role != "other":
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Other role access required.")
-    elif AUTH_TYPE == "jwt":
-        token = request.headers.get("Authorization")
-        if not token or not token.startswith(BEARER_PREFIX):
-            raise HTTPException(status_code=401, detail=ERROR_NOT_AUTHENTICATED)
-        token = token[7:]
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            if payload.get("role") != "other":
-                raise HTTPException(status_code=403, detail="Other role access required")
-        except Exception:
-            raise HTTPException(status_code=401, detail=ERROR_INVALID_TOKEN)
+    return False

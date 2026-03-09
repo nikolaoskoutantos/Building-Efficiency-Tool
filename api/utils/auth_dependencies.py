@@ -1,47 +1,160 @@
-
-
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Request, HTTPException, status
 import jwt
 import os
-from functools import wraps
-from pathlib import Path
-from utils.constants import Role
 
-# Load .env if present
-try:
-    from dotenv import load_dotenv
-    env_path = Path(__file__).parent.parent.parent / ".env"
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
-except ImportError:
-    pass
-
-JWT_SECRET = os.environ.get("SESSION_SECRET_KEY")
-if not JWT_SECRET:
-    raise RuntimeError("SESSION_SECRET_KEY must be set in your .env file or environment variables for JWT authentication.")
+# Constants
+JWT_SECRET = os.getenv("SESSION_SECRET_KEY", "your-secret-key")
 JWT_ALGORITHM = "HS256"
+AUTH_TYPE = os.getenv("AUTH_TYPE", "cookie")
 
-# Dependency to extract and verify JWT, and check role
-def get_current_user_role(required_roles=None):
-    def dependency(request: Request):
-        token = request.headers.get("Authorization")
-        if not token or not token.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-        token = token[7:]
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        except Exception:
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
-        # Accept both string and enum in payload, default to OCCUPANT
-        user_role = payload.get("role", str(Role.OCCUPANT))
-        try:
-            user_role_enum = Role(user_role)
-        except ValueError:
-            user_role_enum = user_role  # fallback to string if not a valid enum
-        if required_roles:
-            # Allow required_roles to be enums or strings, convert all to string for comparison
-            required_roles_str = [str(r) for r in required_roles]
-            if str(user_role_enum) not in required_roles_str:
-                raise HTTPException(status_code=403, detail="Insufficient role")
+# Error messages
+ERROR_NOT_AUTHENTICATED = "Not authenticated"
+ERROR_TOKEN_EXPIRED = "Token expired"
+ERROR_INVALID_TOKEN = "Invalid token"
+BEARER_PREFIX = "Bearer "
+
+def _extract_payload(request: Request) -> dict:
+    print(f"[DEBUG] SESSION_SECRET_KEY in auth_dependencies.py: {JWT_SECRET[:10]}...")
+    if AUTH_TYPE == "cookie":
+        return _extract_cookie_payload(request)
+    elif AUTH_TYPE == "jwt":
+        return _extract_jwt_payload(request)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Unsupported AUTH_TYPE: {AUTH_TYPE}",
+    )
+
+def _extract_cookie_payload(request: Request) -> dict:
+    role = request.session.get("role")
+    user_id = request.session.get("user_id")
+    if not role or not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_NOT_AUTHENTICATED,
+        )
+    return {"user_id": user_id, "role": role.upper()}
+
+def _extract_jwt_payload(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith(BEARER_PREFIX):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_NOT_AUTHENTICATED,
+        )
+    token = auth_header[len(BEARER_PREFIX):]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_TOKEN_EXPIRED,
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_INVALID_TOKEN,
+        )
+    user_id = payload.get("user_id") or payload.get("user")
+    role = payload.get("role")
+    if not user_id or not role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_INVALID_TOKEN,
+        )
+    if role.startswith("Role."):
+        role = role[5:]
+    return {"user_id": user_id, "role": role.upper()}
+def _extract_cookie_payload(request: Request) -> dict:
+    role = request.session.get("role")
+    user_id = request.session.get("user_id")
+    if not role or not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_NOT_AUTHENTICATED,
+        )
+    return {"user_id": user_id, "role": role.upper()}
+
+def _extract_jwt_payload(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith(BEARER_PREFIX):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_NOT_AUTHENTICATED,
+        )
+    token = auth_header[len(BEARER_PREFIX):]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_TOKEN_EXPIRED,
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_INVALID_TOKEN,
+        )
+    user_id = payload.get("user_id") or payload.get("user")
+    role = payload.get("role")
+    if not user_id or not role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_INVALID_TOKEN,
+        )
+    if role.startswith("Role."):
+        role = role[5:]
+    return {"user_id": user_id, "role": role.upper()}
+from fastapi import Request, HTTPException, status
+import jwt
+import os
+
+# Constants
+JWT_SECRET = os.getenv("SESSION_SECRET_KEY", "your-secret-key")
+JWT_ALGORITHM = "HS256"
+AUTH_TYPE = os.getenv("AUTH_TYPE", "cookie")
+
+# Error messages
+ERROR_NOT_AUTHENTICATED = "Not authenticated"
+ERROR_TOKEN_EXPIRED = "Token expired"
+ERROR_INVALID_TOKEN = "Invalid token"
+BEARER_PREFIX = "Bearer "
+
+
+def _extract_payload(request: Request) -> dict:
+    """
+    Extracts and returns the user payload from either cookie session or JWT,
+    depending on AUTH_TYPE. Raises HTTPException on failure.
+    """
+    print(f"[DEBUG] SESSION_SECRET_KEY in auth_dependencies.py: {JWT_SECRET[:10]}...")
+    if AUTH_TYPE == "cookie":
+        return _extract_cookie_payload(request)
+    elif AUTH_TYPE == "jwt":
+        return _extract_jwt_payload(request)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Unsupported AUTH_TYPE: {AUTH_TYPE}",
+    )
+
+
+def get_current_user_role(allowed_roles: list[str]):
+    """
+    Dependency factory. Accepts a list of allowed roles (case-insensitive).
+    Returns the user payload dict if authorized, raises 403 otherwise.
+
+    Usage:
+        user = Depends(get_current_user_role(["ADMIN", "BUILDING_MANAGER"]))
+        user_id = user["user_id"]
+    """
+    # Normalize once at definition time
+    normalized_roles = [r.upper() for r in allowed_roles]
+
+    def _check(request: Request) -> dict:
+        payload = _extract_payload(request)
+        if payload["role"] not in normalized_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access requires one of: {normalized_roles}",
+            )
         return payload
-    return dependency
+
+    return _check

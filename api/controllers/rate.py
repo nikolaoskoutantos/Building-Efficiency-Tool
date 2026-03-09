@@ -13,7 +13,13 @@ import os
 # Error message constants
 RATE_NOT_FOUND_MSG = "Rate not found"
 
-router = APIRouter(prefix="/rates", tags=["Rates"])
+from utils.auth_dependencies import get_current_user_role
+from utils.policies import has_permission
+router = APIRouter(
+    prefix="/rates",
+    tags=["Rates"],
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+)
 
 # Get encryption key from environment
 RATING_ENCRYPTION_KEY = os.getenv("RATING_ENCRYPTION_KEY", "default_key_change_in_production")
@@ -44,13 +50,15 @@ class ServiceScore(BaseModel):
     "/submit",
     responses={
         400: {"description": "Wallet address required for rating"},
+        403: {"description": "You are not authorized to rate this service."},
         500: {"description": "Database error"},
     },
 )
 def submit_user_rating(
-    rate: RateCreate, 
+    rate: RateCreate,
     request: Request,
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """
     Submit or update a rating for a service with encrypted wallet.
@@ -60,9 +68,12 @@ def submit_user_rating(
         # Get current user from your existing auth system
         current_user = get_current_user(request)
         wallet_address = current_user.get("wallet")
-        
+        user_id = user.get("user_id")
         if not wallet_address:
             raise HTTPException(status_code=400, detail="Wallet address required for rating")
+        # Resource-level permission: user can only rate services they are allowed to
+        if user_id is None or not has_permission(user_id, "service", rate.service_id, db):
+            raise HTTPException(status_code=403, detail="You are not authorized to rate this service.")
         
         from sqlalchemy import text
         
@@ -154,20 +165,22 @@ def submit_user_rating(
 @router.get(
     "/service/{service_id}/score",
     responses={
+        403: {"description": "You are not authorized to view this service's ratings."},
         404: {"description": "No ratings found for this service"},
         500: {"description": "Database error"},
     },
 )
-def get_service_rating_score(service_id: int, db: Annotated[Session, Depends(get_db)]):
+def get_service_rating_score(service_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     """
     Get aggregated score and statistics for a service.
     """
     try:
+        user_id = user.get("user_id")
+        if user_id is None or not has_permission(user_id, "service", service_id, db):
+            raise HTTPException(status_code=403, detail="You are not authorized to view this service's ratings.")
         result = get_service_score(db, service_id)
-        
         if not result or result.total_ratings == 0:
             raise HTTPException(status_code=404, detail="No ratings found for this service")
-        
         return {
             "service_id": result.service_id,
             "average_rating": result.average_rating,
@@ -184,12 +197,14 @@ def get_service_rating_score(service_id: int, db: Annotated[Session, Depends(get
     "/my-ratings",
     responses={
         400: {"description": "Wallet address required"},
+        403: {"description": "You are not authorized to view these ratings."},
         500: {"description": "Database error"},
     },
 )
 def get_my_ratings(
     request: Request,
-    db: Annotated[Session, Depends(get_db)]
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """
     Get all ratings submitted by the current user.
@@ -197,9 +212,12 @@ def get_my_ratings(
     try:
         current_user = get_current_user(request)
         wallet_address = current_user.get("wallet")
-        
+        user_id = user.get("user_id")
         if not wallet_address:
             raise HTTPException(status_code=400, detail="Wallet address required")
+        # Resource-level permission: user can only view their own ratings
+        if user_id is None:
+            raise HTTPException(status_code=403, detail="You are not authorized to view these ratings.")
         
         ratings = get_user_ratings(db, wallet_address)
         
@@ -226,11 +244,15 @@ def get_my_ratings(
     "/",
     response_model=RateRead,
     responses={
+        403: {"description": "You are not authorized to create a rating for this service."},
         500: {"description": "Database error"},
     },
 )
-def create_rate(rate: RateCreate, db: Annotated[Session, Depends(get_db)]):
+def create_rate(rate: RateCreate, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     """Legacy endpoint - consider using /submit instead for encrypted ratings"""
+    user_id = user.get("user_id")
+    if user_id is None or not has_permission(user_id, "service", rate.service_id, db):
+        raise HTTPException(status_code=403, detail="You are not authorized to create a rating for this service.")
     db_rate = Rate(**rate.dict())
     db.add(db_rate)
     db.commit()
@@ -245,7 +267,10 @@ def create_rate(rate: RateCreate, db: Annotated[Session, Depends(get_db)]):
     },
 )
 def read_rates(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: int = 100):
-    return db.query(Rate).offset(skip).limit(limit).all()
+    try:
+        return db.query(Rate).offset(skip).limit(limit).all()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.get(
     "/{rate_id}",
@@ -256,10 +281,15 @@ def read_rates(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: in
     },
 )
 def read_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
-    rate = db.query(Rate).filter(Rate.id == rate_id).first()
-    if not rate:
-        raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
-    return rate
+    try:
+        rate = db.query(Rate).filter(Rate.id == rate_id).first()
+        if not rate:
+            raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
+        return rate
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.put(
     "/{rate_id}",
@@ -270,14 +300,19 @@ def read_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
     },
 )
 def update_rate(rate_id: int, rate: RateCreate, db: Annotated[Session, Depends(get_db)]):
-    db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
-    if not db_rate:
-        raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
-    for key, value in rate.dict().items():
-        setattr(db_rate, key, value)
-    db.commit()
-    db.refresh(db_rate)
-    return db_rate
+    try:
+        db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
+        if not db_rate:
+            raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
+        for key, value in rate.dict().items():
+            setattr(db_rate, key, value)
+        db.commit()
+        db.refresh(db_rate)
+        return db_rate
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.delete(
     "/{rate_id}",
@@ -287,12 +322,17 @@ def update_rate(rate_id: int, rate: RateCreate, db: Annotated[Session, Depends(g
     },
 )
 def delete_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
-    db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
-    if not db_rate:
-        raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
-    db.delete(db_rate)
-    db.commit()
-    return {"detail": "Rate deleted"}
+    try:
+        db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
+        if not db_rate:
+            raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
+        db.delete(db_rate)
+        db.commit()
+        return {"detail": "Rate deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 # Test endpoints (remove in production)
 class RateTestCreate(BaseModel):

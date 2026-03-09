@@ -44,16 +44,25 @@ The repository is organized into clearly separated modules for backend (FastAPI)
 
 Below are the current and planned DNS assignments for the demo deployment. Some services are not yet deployed and will be available soon.
 
-| Service           | DNS Name / URL                                                          | Status / Notes                           |
-| ----------------- | ----------------------------------------------------------------------- | ---------------------------------------- |
-| Backend API       | _Not yet deployed_                                                    | FastAPI backend (planned)                |
-| Frontend UI       | _Not yet deployed_                                                    | Vue.js web interface (planned)           |
-| Chainlink Adapter | [adapter.nkoutantos.com/api-docs](https://adapter.nkoutantos.com/api-docs) | Swagger UI for external adapter (active) |
-| Oracle Node       | [oracle.nkoutantos.com](https://oracle.nkoutantos.com)                     | Oracle node management (active)          |
-| Logger/Grafana    | [grafana.nkoutantos.com](https://grafana.nkoutantos.com)                   | Grafana dashboards and metrics (active)  |
-| Logger/Loki       | _Runs locally_                                                        | Loki log aggregation (local only)        |
-| Vault             | [vault.nkoutantos.com](https://vault.nkoutantos.com)                       | HashiCorp Vault UI/API (active)          |
-| IPFS Gateway      | [ipfs.nkoutantos.com](https://ipfs.nkoutantos.com)                         | IPFS HTTP gateway (active)               |
-| Portainer         | [portainer.nkoutantos.com](https://portainer.nkoutantos.com)               | Docker container management UI (active)  |
+| Service                | DNS Name / URL                                                          | Status / Notes                                                         |
+| ---------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Backend API            | _Not yet deployed_                                                    | FastAPI backend (planned)                                              |
+| Frontend UI            | _Not yet deployed_                                                    | Vue.js web interface (planned)                                         |
+| Chainlink Adapter      | [adapter.nkoutantos.com/api-docs](https://adapter.nkoutantos.com/api-docs) | Swagger UI for external adapter (active)                               |
+| Oracle Node            | [oracle.nkoutantos.com](https://oracle.nkoutantos.com)                     | Oracle node management (active)                                        |
+| Logger/Grafana         | [grafana.nkoutantos.com](https://grafana.nkoutantos.com)                   | Grafana dashboards and metrics (active)                                |
+| Logger/Loki            | _Runs locally_                                                        | Loki log aggregation (local only)                                      |
+| Vault                  | [vault.nkoutantos.com](https://vault.nkoutantos.com)                       | HashiCorp Vault UI/API (active)                                        |
+| IPFS Gateway           | [ipfs.nkoutantos.com](https://ipfs.nkoutantos.com)                         | IPFS HTTP gateway (active)                                             |
+| Portainer              | [portainer.nkoutantos.com](https://portainer.nkoutantos.com)               | Docker container management UI (active)                                |
+| Portainer (Instance 2) | _Not yet deployed_                                                    | Secondary Docker management UI (planned)                               |
+| Traefik                | _Not yet deployed_                                                    | Reverse proxy and load balancer dashboard (planned)                    |
+| MLflow                 | _Not yet deployed_                                                    | ML experiment tracking and artifact store (planned)                    |
+| EMQX (MQTT Broker)     | _Not yet deployed_                                                    | MQTT broker dashboard and API (planned)                                |
+| Authelia               | Not yet deployed                                                        | Authentication Middleware for model registration via MLFlow (planned)) |
 
 > **Tip:** Update your DNS provider to point these subdomains to your server's public IP. Configure your reverse proxy (Caddy, Nginx, etc.) to route each subdomain to the correct Docker service/container.
+
+> **⚠️ WARNING:**
+> A blank `.env` file is required in the root folder due to Docker Compose constraints.
+> Without this file, environment variables may not load correctly and services may fail to start.

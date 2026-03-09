@@ -10,7 +10,12 @@ from models.sensor import Sensor
 from models.mqtt_config import MQTTBrokerConfig
 import os
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+from utils.auth_dependencies import get_current_user_role
+router = APIRouter(
+    prefix="/dashboard",
+    tags=["Dashboard"],
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+)
 
 # Pydantic response models
 class DashboardDevice(BaseModel):
@@ -53,17 +58,30 @@ class DashboardResponse(BaseModel):
 @router.get("/", 
     response_model=DashboardResponse,
     responses={
-        500: {"description": "Internal server error."}
+        500: {"description": "Internal server error."},
+        403: {"description": "Forbidden: User not authorized or missing user ID in token"}
     }
 )
-async def get_dashboard_data(db: Annotated[Session, Depends(get_db)]):
+async def get_dashboard_data(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
     """
     Unified dashboard endpoint that loads all necessary data in a single optimized query.
     Returns devices, buildings, MQTT config, user settings, and statistics.
     """
     try:
-        # 1. Load buildings
-        buildings = db.query(Building).all()
+        # Validate user/building association
+        user_id = user.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=403, detail="User ID missing in token.")
+        from models.hvac_models import UserBuilding
+        # Only allow buildings the user is registered to
+        user_buildings = db.query(UserBuilding).filter_by(user_id=user_id, status="active").all()
+        allowed_building_ids = [ub.building_id for ub in user_buildings]
+        if not allowed_building_ids:
+            raise HTTPException(status_code=403, detail="You are not authorized for any buildings.")
+        buildings = db.query(Building).filter(Building.id.in_(allowed_building_ids)).all()
         buildings_data = [
             DashboardBuilding(
                 id=building.id,
@@ -91,7 +109,8 @@ async def get_dashboard_data(db: Annotated[Session, Depends(get_db)]):
         ).outerjoin(
             Sensor, Sensor.hvac_unit_id == HVACUnit.id
         ).filter(
-            HVACUnit.device_key.isnot(None)  # Only include devices with keys
+            HVACUnit.device_key.isnot(None),
+            HVACUnit.building_id.in_(allowed_building_ids)
         ).group_by(
             HVACUnit.id,
             HVACUnit.building_id,

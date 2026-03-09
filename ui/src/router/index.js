@@ -9,17 +9,8 @@ const routes = [
     path: '/',
     name: 'Home',
     component: DefaultLayout,
-    redirect: '/dashboard',
+    redirect: '/efficiencytool',
     children: [
-      {
-        path: '/dashboard',
-        name: 'Dashboard',
-        meta: { requiresAuth: true },
-        component: () =>
-          import(
-            /* webpackChunkName: "dashboard" */ '@/views/dashboard/Dashboard.vue'
-          ),
-      },
       {
         path: '/efficiencytool',
         name: 'EfficiencyTool',

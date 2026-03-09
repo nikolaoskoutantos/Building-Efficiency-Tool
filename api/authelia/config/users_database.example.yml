@@ -1,0 +1,8 @@
+# Example Authelia users_database.yml
+users:
+  admin:
+    password: "$argon2id$v=19$m=65536,t=2,p=1$examplehash$examplehash"
+    displayname: "Administrator"
+    email: "admin@example.com"
+    groups:
+      - admins

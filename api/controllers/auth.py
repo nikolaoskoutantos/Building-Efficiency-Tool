@@ -94,7 +94,7 @@ if not JWT_SECRET:
     raise RuntimeError("SESSION_SECRET_KEY must be set in your .env file or environment variables for JWT authentication.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60
-AUTH_TYPE = os.getenv("AUTH_TYPE", "cookie")  # 'cookie' or 'jwt'
+AUTH_TYPE = os.getenv("AUTH_TYPE", "jwt")  # 'cookie' or 'jwt'
 
 class LoginRequest(BaseModel):
     # Traditional login fields (optional)

@@ -449,15 +449,22 @@ export default {
     },
     async loadSystemPrefsFromBackend() {
       try {
-        const response = await axios.get(`${this.apiBaseUrl}/user/settings?wallet_address=${this.settings.wallet_address}`);
+        const authStore = useAuthStore()
+        const jwtToken = authStore.getJwtToken ? authStore.getJwtToken() : localStorage.getItem('jwtToken')
+        const response = await axios.get(`${this.apiBaseUrl}/user/settings?wallet_address=${this.settings.wallet_address}`, {
+          headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+            'Content-Type': 'application/json'
+          }
+        });
         // Only update system preferences fields
         this.settings.default_building_id = response.data.default_building_id || '';
         this.settings.wallet_address = response.data.wallet_address || '';
         this.settings.api_base_url = response.data.api_base_url || '';
         this.settings.public_key = response.data.public_key || '';
       } catch (error) {
-          console.error('Failed to load system preferences from backend:', error);
-          this.showAlert('warning', 'Failed to load system preferences from backend. Please check your connection.');
+        console.error('Failed to load system preferences from backend:', error);
+        this.showAlert('warning', 'Failed to load system preferences from backend. Please check your connection.');
       }
     },
 
@@ -501,7 +508,7 @@ export default {
           default_building_id: this.settings.default_building_id,
           wallet_address: this.settings.wallet_address,
           api_base_url: this.settings.api_base_url,
-            public_key: this.settings.public_key 
+          public_key: this.settings.public_key 
         }
         
         // Always save personal data locally (GDPR compliant - user's device)
@@ -509,25 +516,31 @@ export default {
         
         // Save system preferences locally for now
         localStorage.setItem('userSystemPrefs', JSON.stringify(systemPreferences))
-        
         this.showAlert('success', 'Settings saved successfully!')
         
-          // Send system preferences to backend
-          try {
-            const response = await axios.post(`${this.apiBaseUrl}/user/settings?wallet_address=${this.settings.wallet_address}`, systemPreferences);
-            if (response.status !== 200 && response.status !== 201) {
-              this.showAlert('danger', `Backend error: ${response.status} ${response.statusText}`);
-              console.error('Backend error:', response);
+        // Send system preferences to backend
+        try {
+          const authStore = useAuthStore()
+          const jwtToken = authStore.getJwtToken ? authStore.getJwtToken() : localStorage.getItem('jwtToken')
+          const response = await axios.post(`${this.apiBaseUrl}/user/settings?wallet_address=${this.settings.wallet_address}`, systemPreferences, {
+            headers: {
+              'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+              'Content-Type': 'application/json'
             }
-          } catch (error) {
-            if (error.response) {
-              this.showAlert('danger', `Backend error: ${error.response.status} ${error.response.data.detail || error.response.statusText}`);
-              console.error('Backend error:', error.response);
-            } else {
-              this.showAlert('danger', 'Failed to save settings. Please check your backend connection.');
-              console.error('Save error:', error);
-            }
+          });
+          if (response.status !== 200 && response.status !== 201) {
+            this.showAlert('danger', `Backend error: ${response.status} ${response.statusText}`);
+            console.error('Backend error:', response);
           }
+        } catch (error) {
+          if (error.response) {
+            this.showAlert('danger', `Backend error: ${error.response.status} ${error.response.data.detail || error.response.statusText}`);
+            console.error('Backend error:', error.response);
+          } else {
+            this.showAlert('danger', 'Failed to save settings. Please check your backend connection.');
+            console.error('Save error:', error);
+          }
+        }
       } catch (error) {
         console.error('Failed to save settings:', error)
         this.showAlert('danger', 'Failed to save settings. Please try again.')
@@ -550,8 +563,14 @@ export default {
       this.loading = true
       try {
         console.log('Loading buildings from:', `${this.apiBaseUrl}/buildings`)
-        const response = await fetch(`${this.apiBaseUrl}/buildings`, {
-          credentials: 'include' // Include session cookies
+        const authStore = useAuthStore()
+        const jwtToken = authStore.getJwtToken ? authStore.getJwtToken() : localStorage.getItem('jwtToken')
+        const response = await fetch(`${this.apiBaseUrl}/buildings/`, {
+          headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
         })
         
         if (response.ok) {
@@ -600,10 +619,17 @@ export default {
           
             // Call backend to delete personal data
             try {
-              await axios.delete(`${this.apiBaseUrl}/user/settings?wallet_address=${this.settings.wallet_address}`);
-              } catch (error) {
-                console.error('Failed to delete personal data from backend:', error);
-                this.showAlert('warning', 'Failed to delete personal data from backend. Please check your connection.');
+              const authStore = useAuthStore()
+              const jwtToken = authStore.getJwtToken ? authStore.getJwtToken() : localStorage.getItem('jwtToken')
+              await axios.delete(`${this.apiBaseUrl}/user/settings?wallet_address=${this.settings.wallet_address}`, {
+                headers: {
+                  'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+                  'Content-Type': 'application/json'
+                }
+              });
+            } catch (error) {
+              console.error('Failed to delete personal data from backend:', error);
+              this.showAlert('warning', 'Failed to delete personal data from backend. Please check your connection.');
             }
         } catch (error) {
           console.error('Failed to delete personal data:', error)
@@ -832,13 +858,17 @@ export default {
       this.buildingForm.loading = true
       try {
         const method = this.buildingForm.editing ? 'PUT' : 'POST'
-        const response = await fetch(this.getBuildingApiUrl(), {
+        const authStore = useAuthStore()
+        const jwtToken = authStore.getJwtToken ? authStore.getJwtToken() : localStorage.getItem('jwtToken')
+        const response = await fetch(this.getBuildingApiUrl() + '/', {
           method,
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+            'Content-Type': 'application/json'
+          },
           credentials: 'include',
           body: JSON.stringify(this.prepareBuildingPayload())
         })
-
         await this.handleBuildingSaveResponse(response)
       } catch (error) {
         this.handleBuildingSaveError(error)

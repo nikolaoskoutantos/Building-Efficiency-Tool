@@ -1,4 +1,4 @@
-  computed: {
+computed: {
     isMQTTConfigValid() {
       // Check for required fields from backend
       return (
@@ -900,11 +900,19 @@ export default {
   methods: {
     async loadBuildings() {
       try {
-        const response = await fetch(`${this.apiBaseUrl}/buildings`)
+        const jwtToken = this.getJwtToken()
+        console.log('[loadBuildings] JWT Token:', jwtToken)
+        const headers = {
+          'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+          'Content-Type': 'application/json'
+        }
+        console.log('[loadBuildings] Headers:', headers)
+        const response = await fetch(`${this.apiBaseUrl}/buildings`, {
+          headers,
+          credentials: 'include'
+        })
         if (!response.ok) throw new Error('Failed to fetch buildings')
         this.buildings = await response.json()
-        
-        // Auto-select default building from user settings
         await this.setDefaultBuilding()
       } catch (error) {
         console.error('Failed to load buildings:', error)
@@ -953,11 +961,19 @@ export default {
     async loadExistingDevices() {
       this.loadingDevices = true
       try {
-        const response = await fetch(`${this.apiBaseUrl}/devices`)
+        const jwtToken = this.getJwtToken()
+        console.log('[loadExistingDevices] JWT Token:', jwtToken)
+        const headers = {
+          'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+          'Content-Type': 'application/json'
+        }
+        console.log('[loadExistingDevices] Headers:', headers)
+        const response = await fetch(`${this.apiBaseUrl}/devices/`, {
+          headers,
+          credentials: 'include'
+        })
         if (!response.ok) throw new Error('Failed to fetch devices')
         const devices = await response.json()
-        
-        // Devices now come with real sensor counts from backend
         this.existingDevices = devices
       } catch (error) {
         console.error('Failed to load existing devices:', error)
@@ -976,7 +992,14 @@ export default {
       this.mqttConfig.loading = true
       console.log('Loading MQTT config from API:', `${this.apiBaseUrl}/mqtt/config`)
       try {
-        const response = await fetch(`${this.apiBaseUrl}/mqtt/config`)
+        const jwtToken = this.getJwtToken()
+        const response = await fetch(`${this.apiBaseUrl}/mqtt/config`, {
+          headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        })
         if (!response.ok) throw new Error('Failed to fetch MQTT config')
         const config = await response.json()
         console.log('MQTT config response:', config)
@@ -1032,19 +1055,21 @@ export default {
       this.editMode = true
       this.editingDeviceId = device.id
       this.showRegistrationForm = true
-      
-      // Pre-fill form with device data
       this.form.building_id = device.building_id
       this.form.central_unit = device.central_unit || ''
       this.form.zone = device.zone || ''
       this.form.room = device.room || ''
-      
-      // Load existing sensors for this device
       try {
-        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors`)
+        const jwtToken = this.getJwtToken()
+        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors/`, {
+          headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        })
         if (response.ok) {
           const sensors = await response.json()
-          // No need to add rate_of_sampling or raw_data_id - handled by database
           this.form.sensors = sensors
         } else {
           this.form.sensors = []
@@ -1053,10 +1078,7 @@ export default {
         console.error('Failed to load sensors for editing:', error)
         this.form.sensors = []
       }
-      
       this.showAlert('info', `Editing device: ${device.building_name}. Update details below.`)
-      
-      // Scroll to form
       setTimeout(() => {
         document.querySelector('.card .card-header').scrollIntoView({ behavior: 'smooth' })
       }, 100)
@@ -1091,22 +1113,20 @@ export default {
     async performKeyRotation(device) {
       console.log('Starting key rotation...')
       this.loading = true
-      
       try {
         const url = `${this.apiBaseUrl}/devices/${device.id}/credentials/upsert`
         console.log('Calling API:', url)
-        
+        const jwtToken = this.getJwtToken()
         const response = await fetch(url, {
           method: 'POST',
           headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
             'Content-Type': 'application/json'
           },
           credentials: 'include',
           body: JSON.stringify({})
         })
-        
         console.log('API Response status:', response.status)
-        
         if (!response.ok) {
           const errorText = await response.text()
           console.error('API Error response:', errorText)
@@ -1118,30 +1138,21 @@ export default {
           }
           throw new Error(errorData.detail || 'Failed to rotate key')
         }
-        
         const newCredentials = await response.json()
         console.log('New credentials received:', { 
           device_key: newCredentials.device_key ? '***received***' : 'missing',
           device_secret: newCredentials.device_secret ? '***received***' : 'missing'
         })
-        
-        // Show new credentials in modal
-        console.log('Setting credentials data...')
         this.credentials.device_key = newCredentials.device_key
         this.credentials.device_secret = newCredentials.device_secret
         this.credentials.title = 'Device Key Rotated Successfully!'
         this.credentials.isRotation = true
         console.log('About to show modal, credentials.show will be:', true)
-        
-        // Use nextTick to ensure Vue has processed the data changes
         await this.$nextTick()
         this.credentials.show = true
         console.log('Modal show state set to:', this.credentials.show)
-        
-        // Refresh device list to show updated key
         await this.loadExistingDevices()
         console.log('Key rotation completed successfully')
-        
       } catch (error) {
         console.error('Key rotation failed:', error)
         this.showAlert('danger', error.message || 'Failed to rotate device key.')
@@ -1182,16 +1193,19 @@ export default {
 
     async viewDeviceDetails(device) {
       console.log('View details for device:', device)
-      
-      // Set device and show modal
       this.deviceDetails.device = device
       this.deviceDetails.sensors = []
       this.deviceDetails.loading = true
       this.deviceDetails.show = true
-      
       try {
-        // Fetch sensors for this device
-        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors`)
+        const jwtToken = this.getJwtToken()
+        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors/`, {
+          headers: {
+            'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
+        })
         if (response.ok) {
           this.deviceDetails.sensors = await response.json()
         } else {
@@ -1256,10 +1270,7 @@ export default {
         return false
       }
 
-      if (this.editMode && (!this.form.central_unit || !this.form.zone || !this.form.room)) {
-        this.showAlert('warning', 'Please fill in all device identification fields.')
-        return false
-      }
+      // No longer require central_unit, zone, room in editMode
 
       return true
     },
@@ -1338,17 +1349,32 @@ export default {
       const url = this.editMode 
         ? `${this.apiBaseUrl}/devices/${this.editingDeviceId}`
         : `${this.apiBaseUrl}/devices/register`
-      
       const method = this.editMode ? 'PUT' : 'POST'
-      
+      const jwtToken = this.getJwtToken()
       return await fetch(url, {
         method,
         headers: {
+          'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
           'Content-Type': 'application/json'
         },
         credentials: 'include',
         body: JSON.stringify(payload)
       })
+    },
+    getJwtToken() {
+      try {
+        // Dynamically import to avoid circular dependencies
+        const authStore = globalThis.$authStore || null
+        if (authStore && typeof authStore.getJwtToken === 'function') {
+          return authStore.getJwtToken()
+        }
+        // Fallback: try localStorage
+        const token = localStorage.getItem('jwtToken')
+        return token || null
+      } catch (error) {
+        console.warn('Could not get JWT token:', error)
+        return null
+      }
     },
 
     async parseApiError(response) {

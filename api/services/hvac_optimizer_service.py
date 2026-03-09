@@ -65,37 +65,8 @@ ERR_MODEL_NOT_TRAINED = "HVAC model is not ready. Train or load MLflow models fi
 
 
 class HVACOptimizerService:
-        LINEAR_MODEL_NAME = "temperature_linear_regression"
         RF_MODEL_NAME = "energy_temp_rf"
 
-        def _load_linear_regression_from_mlflow(self):
-            """
-            Fetch only the 'a' parameter from the latest linear regression model for this building from MLflow.
-            Uses the exact minimal code pattern as in the notebook.
-            Sets self.a_coefficient if found, returns True if successful, False otherwise.
-            """
-            import mlflow
-            from mlflow.tracking import MlflowClient
-            mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-            mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
-            MODEL_NAME = self.LINEAR_MODEL_NAME
-            BUILDING_ID = str(self.building_id)
-            try:
-                client = MlflowClient(tracking_uri=mlflow.get_tracking_uri(), registry_uri=mlflow.get_registry_uri())
-                mvs = client.search_model_versions(
-                    f"name = '{MODEL_NAME}' and tags.buildingID = '{BUILDING_ID}'"
-                )
-                if not mvs:
-                    print(f"No model versions for {MODEL_NAME} with buildingID={BUILDING_ID}")
-                    return False
-                latest = max(mvs, key=lambda mv: mv.creation_timestamp)
-                a = client.get_model_version(MODEL_NAME, latest.version).tags["a"]
-                self.a_coefficient = float(a)
-                print(f"Loaded 'a' coefficient: {self.a_coefficient}")
-                return True
-            except Exception as e:
-                print(f"Error fetching 'a' parameter from MLflow: {e}")
-                return False
 
         def _load_random_forest_from_mlflow(self) -> bool:
             """
@@ -119,9 +90,14 @@ class HVACOptimizerService:
                 model_uri = f"models:/{self.RF_MODEL_NAME}/{latest.version}"
                 self.rf_model = mlflow.sklearn.load_model(model_uri)
 
-                avg_cons_tag = latest.tags.get("avg_consumption_off") if latest.tags else None
-                if avg_cons_tag is not None:
-                    self.avg_consumption_off = float(avg_cons_tag)
+                # Load a_coefficient and avg_consumption_off from tags
+                if latest.tags:
+                    a_tag = latest.tags.get("a_coefficient")
+                    if a_tag is not None:
+                        self.a_coefficient = float(a_tag)
+                    avg_cons_tag = latest.tags.get("avg_consumption_off")
+                    if avg_cons_tag is not None:
+                        self.avg_consumption_off = float(avg_cons_tag)
 
                 print(
                     f"Loaded Random Forest model from MLflow for building {self.building_id} "
@@ -242,34 +218,18 @@ class HVACOptimizerService:
                 if building:
                     self.latitude = building.lat
                     self.longitude = building.lon
-                    # Load models
-                    t1 = time.time()
-                    print("[HVACOptimizerService] Loading linear regression model from MLflow...")
-                    self._load_linear_regression_model()
-                    print(f"[HVACOptimizerService] Linear regression model load took {time.time() - t1:.2f} seconds")
 
-                    t2 = time.time()
+                    # Load Random Forest model (includes LR parameters from tags)
+                    t1 = time.time()
                     print("[HVACOptimizerService] Loading random forest model from MLflow...")
                     self._load_random_forest_model()
-                    print(f"[HVACOptimizerService] Random forest model load took {time.time() - t2:.2f} seconds")
+                    print(f"[HVACOptimizerService] Random forest model load took {time.time() - t1:.2f} seconds")
                    
                 else:
                     raise ValueError(f"Building ID {self.building_id} not found in DB.")
             finally:
                 db.close()
 
-        def _load_linear_regression_model(self) -> bool:
-            """Load linear regression model for the current building from MLflow."""
-            try:
-                loaded = self._load_linear_regression_from_mlflow()
-                if loaded:
-                    print(f"Loaded Linear Regression model from MLflow for building {self.building_id}")
-                    return True
-                print(f"No Linear Regression model found in MLflow for building {self.building_id}")
-                return False
-            except Exception as e:
-                print(f"Error loading linear regression model from MLflow: {e}")
-                return False
 
         def _load_random_forest_model(self) -> bool:
             """Load Random Forest model for the current building from MLflow."""

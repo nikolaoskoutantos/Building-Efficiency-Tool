@@ -332,10 +332,37 @@ export default {
     this.addSensor() // Start with one sensor
   },
   methods: {
+        async loadBuildings() {
+          try {
+            const jwtToken = this.getJwtToken()
+            const headers = { 'Content-Type': 'application/json' }
+            if (jwtToken) headers['Authorization'] = `Bearer ${jwtToken}`
+            await axios.get(
+              `${import.meta.env.VITE_API_BASE_URL}/buildings`,
+              {
+                headers,
+                withCredentials: true
+              }
+            )
+            // You can handle the response as needed, e.g. store in this.buildings
+            // this.buildings = response.data
+          } catch (error) {
+            console.error('Failed to load buildings:', error)
+            this.showAlert('danger', 'Failed to load buildings. Please refresh the page.')
+          }
+        },
     async loadDevices() {
       try {
-        // Note: You might need to create this endpoint in your API
-        const response = await axios.get(`${import.meta.env.VITE_API_BASE_URL}/devices`)
+        const jwtToken = this.getJwtToken()
+        const headers = { 'Content-Type': 'application/json' }
+        if (jwtToken) headers['Authorization'] = `Bearer ${jwtToken}`
+        const response = await axios.get(
+          `${import.meta.env.VITE_API_BASE_URL}/devices`,
+          {
+            headers,
+            withCredentials: true
+          }
+        )
         this.devices = response.data.map(device => ({
           ...device,
           location: `${device.central_unit || 'No Unit'} - ${device.zone || 'No Zone'} - ${device.room || 'No Room'}`
@@ -373,13 +400,10 @@ export default {
         this.showAlert('warning', 'Please select a device.')
         return
       }
-
       if (this.form.sensors.length === 0) {
         this.showAlert('warning', 'Please add at least one sensor.')
         return
       }
-
-      // Validate required fields
       for (let i = 0; i < this.form.sensors.length; i++) {
         const sensor = this.form.sensors[i]
         if (!sensor.type || !sensor.unit || !sensor.lat || !sensor.lon || !sensor.raw_data_id) {
@@ -387,36 +411,48 @@ export default {
           return
         }
       }
-
       this.loading = true
       this.alert.show = false
-
       try {
-        // Note: You might need to create this endpoint or modify the existing one
         const payload = {
           device_id: Number.parseInt(this.form.device_id),
           sensors: this.form.sensors
         }
-
+        const jwtToken = this.getJwtToken()
+        const headers = { 'Content-Type': 'application/json' }
+        if (jwtToken) headers['Authorization'] = `Bearer ${jwtToken}`
         await axios.post(
           `${import.meta.env.VITE_API_BASE_URL}/devices/sensors`,
-          payload
+          payload,
+          {
+            headers,
+            withCredentials: true
+          }
         )
-
         this.successModal.count = this.form.sensors.length
         this.successModal.show = true
-
       } catch (error) {
         console.error('Sensor registration failed:', error)
         let message = 'Failed to register sensors. Please try again.'
-        
         if (error.response?.data?.detail) {
           message = error.response.data.detail
         }
-        
         this.showAlert('danger', message)
       } finally {
         this.loading = false
+      }
+    },
+    getJwtToken() {
+      try {
+        const authStore = globalThis.$authStore || null
+        if (authStore && typeof authStore.getJwtToken === 'function') {
+          return authStore.getJwtToken()
+        }
+        const token = localStorage.getItem('jwtToken')
+        return token || null
+      } catch (error) {
+        console.warn('Could not get JWT token:', error)
+        return null
       }
     },
 

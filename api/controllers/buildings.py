@@ -1,5 +1,6 @@
 BUILDING_NOT_FOUND = "Building not found"
 BUILDING_DELETED = "Building deleted"
+USER_ID_MISSING = "User ID missing in token."
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Annotated
 from pydantic import BaseModel
@@ -8,7 +9,12 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.hvac_models import Building
 
-router = APIRouter(prefix="/buildings", tags=["Buildings"])
+from utils.auth_dependencies import get_current_user_role
+router = APIRouter(
+    prefix="/buildings",
+    tags=["Buildings"],
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+)
 
 class BuildingCreate(BaseModel):
     name: str
@@ -39,7 +45,10 @@ def get_buildings(db: Annotated[Session, Depends(get_db)]):
 @router.post(
     "/",
     response_model=BuildingRead,
-    responses={404: {"description": "Building not found"}}
+    responses={
+        404: {"description": "Building not found"},
+        403: {"description": "Forbidden: User not authorized or missing user ID in token"}
+    }
 )
 def create_building(building: BuildingCreate, db: Annotated[Session, Depends(get_db)]):
     db_building = Building(**building.dict())
@@ -51,9 +60,22 @@ def create_building(building: BuildingCreate, db: Annotated[Session, Depends(get
 @router.get(
     "/{building_id}",
     response_model=BuildingRead,
-    responses={404: {"description": "Building not found"}}
+    responses={
+        404: {"description": "Building not found"},
+        403: {"description": "Forbidden: User not authorized or missing user ID in token"}
+    }
 )
-def get_building(building_id: int, db: Annotated[Session, Depends(get_db)]):
+def get_building(
+    building_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
+    user_id = user.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=403, detail=USER_ID_MISSING)
+    from utils.policies import has_permission
+    if not has_permission(user_id, "building", building_id, db):
+        raise HTTPException(status_code=403, detail="You are not authorized to access this building.")
     building = db.query(Building).filter(Building.id == building_id).first()
     if not building:
         raise HTTPException(status_code=404, detail=BUILDING_NOT_FOUND)
@@ -62,9 +84,23 @@ def get_building(building_id: int, db: Annotated[Session, Depends(get_db)]):
 @router.put(
     "/{building_id}",
     response_model=BuildingRead,
-    responses={404: {"description": "Building not found"}}
+    responses={
+        404: {"description": "Building not found"},
+        403: {"description": "Forbidden: User not authorized or missing user ID in token"}
+    }
 )
-def update_building(building_id: int, building: BuildingCreate, db: Annotated[Session, Depends(get_db)]):
+def update_building(
+    building_id: int,
+    building: BuildingCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
+    user_id = user.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=403, detail=USER_ID_MISSING)
+    from utils.policies import has_permission
+    if not has_permission(user_id, "building", building_id, db):
+        raise HTTPException(status_code=403, detail="You are not authorized to modify this building.")
     db_building = db.query(Building).filter(Building.id == building_id).first()
     if not db_building:
         raise HTTPException(status_code=404, detail=BUILDING_NOT_FOUND)
@@ -76,9 +112,23 @@ def update_building(building_id: int, building: BuildingCreate, db: Annotated[Se
 
 @router.delete(
     "/{building_id}",
-    responses={200: {"description": "Building deleted"}, 404: {"description": "Building not found"}}
+    responses={
+        200: {"description": "Building deleted"},
+        404: {"description": "Building not found"},
+        403: {"description": "Forbidden: User not authorized or missing user ID in token"}
+    }
 )
-def delete_building(building_id: int, db: Annotated[Session, Depends(get_db)]):
+def delete_building(
+    building_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
+    user_id = user.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=403, detail=USER_ID_MISSING)
+    from utils.policies import has_permission
+    if not has_permission(user_id, "building", building_id, db):
+        raise HTTPException(status_code=403, detail="You are not authorized to delete this building.")
     db_building = db.query(Building).filter(Building.id == building_id).first()
     if not db_building:
         raise HTTPException(status_code=404, detail=BUILDING_NOT_FOUND)

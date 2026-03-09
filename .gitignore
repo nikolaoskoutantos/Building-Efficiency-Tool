@@ -20,3 +20,13 @@ build/
 # OS / Editor junk
 .DS_Store
 *.swp
+
+# Authelia config: ignore real config files
+api/authelia/config/configuration.yml
+api/authelia/config/users_database.yml
+
+# Authelia local database and notification logs
+api/authelia/config/db.sqlite3
+api/authelia/config/notification.txt
+
+api/services/test_optim.py

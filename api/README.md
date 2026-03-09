@@ -50,6 +50,16 @@ RATING_ENCRYPTION_KEY=your-encryption-key
 DEV=true
 ```
 
+## Important: .env file location
+
+For Docker Compose to work correctly, you must define your .env file in the api folder (not the root folder).
+
+- Copy .env.example to .env in the api directory.
+- Fill in all required environment variables.
+- Docker Compose will load .env from the api folder when you run commands from there.
+
+If .env is missing or empty, services may fail to start due to missing environment variables.
+
 ##### Development Notes
 
 - All schema and encryption logic is automated; no manual DB setup needed

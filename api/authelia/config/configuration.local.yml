@@ -1,0 +1,35 @@
+server:
+  address: 'tcp://0.0.0.0:9091'
+
+log:
+  level: debug
+
+identity_validation:
+  reset_password:
+    jwt_secret: ${AUTHELIA_JWT_SECRET}
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+
+access_control:
+  default_policy: one_factor
+  rules:
+    - domain: '*.nkoutantos.com'
+      policy: bypass
+
+session:
+  secret: ${AUTHELIA_SESSION_SECRET}
+  cookies:
+    - domain: nkoutantos.com
+      authelia_url: https://auth.nkoutantos.com
+      default_redirection_url: https://mlflow.nkoutantos.com
+
+storage:
+  encryption_key: ${AUTHELIA_STORAGE_ENCRYPTION_KEY}
+  local:
+    path: /config/db.sqlite3
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt
