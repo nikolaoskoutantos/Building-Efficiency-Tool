@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { buildApiUrl } from '@/config/api.js'
 import { useAuthStore } from '@/stores/auth.js'
+import { parseApiErrorResponse } from '@/utils/apiErrors'
 
 export const useRatesStore = defineStore('rates', () => {
   // State
@@ -48,7 +49,7 @@ export const useRatesStore = defineStore('rates', () => {
         if (response.status === 401) {
           throw new Error('Authentication required. Please log in.')
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(await parseApiErrorResponse(response, 'Failed to submit rating.'))
       }
 
       const result = await response.json()
@@ -88,7 +89,7 @@ export const useRatesStore = defineStore('rates', () => {
         if (response.status === 401) {
           throw new Error('Authentication required. Please log in.')
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(await parseApiErrorResponse(response, 'Failed to fetch your ratings.'))
       }
 
       const result = await response.json()
@@ -118,7 +119,7 @@ export const useRatesStore = defineStore('rates', () => {
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(await parseApiErrorResponse(response, 'Failed to fetch service score.'))
       }
 
       const result = await response.json()

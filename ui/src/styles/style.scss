@@ -26,6 +26,35 @@ html, body {
   box-sizing: border-box;
 }
 
+.schedule-time-picker-popper {
+  z-index: 5000 !important;
+}
+
+.offcanvas-backdrop,
+.modal-backdrop,
+.sidebar-backdrop {
+  background-color: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body > .fade.show:not(.modal):not(.offcanvas) {
+  background-color: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body > .offcanvas-backdrop.fade.show,
+body > .modal-backdrop.fade.show,
+body > .sidebar-backdrop.fade.show,
+body > .fade.show,
+#app ~ .fade.show,
+.wrapper ~ .fade.show {
+  background-color: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 .wrapper {
   width: 100%;
   padding-inline: var(--cui-sidebar-occupy-start, 0) var(--cui-sidebar-occupy-end, 0);
@@ -84,16 +113,38 @@ html, body {
     --cui-footer-bg: var(--cui-body-bg);
   }
   .el-input__wrapper {
-  background-color: #222 !important;
-  color: #fff !important;
-}
-.el-time-panel {
-  background-color: #222 !important;
-  color: #fff !important;
-}
+    background-color: #222 !important;
+    color: #fff !important;
+  }
+
+  .el-time-panel {
+    background-color: #222 !important;
+    color: #fff !important;
+  }
+
+  .offcanvas-backdrop.show,
+  .modal-backdrop.show,
+  .sidebar-backdrop.show {
+    background-color: transparent !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  body > .fade.show:not(.modal):not(.offcanvas) {
+    background-color: transparent !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  body > .offcanvas-backdrop.fade.show,
+  body > .modal-backdrop.fade.show,
+  body > .sidebar-backdrop.fade.show,
+  body > .fade.show,
+  #app ~ .fade.show,
+  .wrapper ~ .fade.show {
+    background-color: transparent !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
 
 }
-
-
-
-

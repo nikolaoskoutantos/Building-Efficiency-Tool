@@ -10,12 +10,12 @@ from pydantic import BaseModel
 # Error message constants
 SENSOR_NOT_FOUND_MSG = "Sensor not found"
 
-from utils.auth_dependencies import get_current_user_role
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
 from utils.policies import has_permission
 router = APIRouter(
     prefix="/sensors",
     tags=["Sensors"],
-    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 )
 
 # Pydantic schemas
@@ -69,7 +69,7 @@ def get_db():
     }
 )
 def create_sensor(sensor: SensorCreate, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
-    user_id = user.get("user_id")
+    user_id = resolve_registered_user_id(user, db)
     # Resource-level permission: user can only create sensors in buildings they manage
     if user_id is None or not has_permission(user_id, "building", sensor.building_id, db):
         raise HTTPException(status_code=403, detail="You are not authorized to create sensors in this building.")
@@ -86,8 +86,8 @@ def create_sensor(sensor: SensorCreate, db: Annotated[Session, Depends(get_db)],
         403: {"description": "You are not authorized to view sensors."}
     }
 )
-def read_sensors(db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))], skip: int = 0, limit: int = 100):
-    user_id = user.get("user_id")
+def read_sensors(db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))], skip: int = 0, limit: int = 100):
+    user_id = resolve_registered_user_id(user, db)
     # Only return sensors in buildings the user manages
     if user_id is None:
         raise HTTPException(status_code=403, detail="You are not authorized to view sensors.")
@@ -103,9 +103,9 @@ def read_sensors(db: Annotated[Session, Depends(get_db)], user: Annotated[dict, 
         404: {"description": "Sensor not found"}
     }
 )
-def read_sensor(sensor_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+def read_sensor(sensor_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]):
     sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
-    user_id = user.get("user_id")
+    user_id = resolve_registered_user_id(user, db)
     if not sensor:
         raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
     if user_id is None or not has_permission(user_id, "sensor", sensor_id, db):
@@ -122,7 +122,7 @@ def read_sensor(sensor_id: int, db: Annotated[Session, Depends(get_db)], user: A
 )
 def update_sensor(sensor_id: int, sensor: SensorUpdate, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     db_sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
-    user_id = user.get("user_id")
+    user_id = resolve_registered_user_id(user, db)
     if not db_sensor:
         raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
     if user_id is None or not has_permission(user_id, "sensor", sensor_id, db):
@@ -143,7 +143,7 @@ def update_sensor(sensor_id: int, sensor: SensorUpdate, db: Annotated[Session, D
 )
 def delete_sensor(sensor_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     db_sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
-    user_id = user.get("user_id")
+    user_id = resolve_registered_user_id(user, db)
     if not db_sensor:
         raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND_MSG)
     if user_id is None or not has_permission(user_id, "sensor", sensor_id, db):

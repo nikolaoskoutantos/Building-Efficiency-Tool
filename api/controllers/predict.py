@@ -1,16 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.predictor import Predictor, TrainingHistory
 from services.hvac_optimizer_service import HVACOptimizerService
 from typing import List, Optional, Annotated
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from time import perf_counter
+import os
 
-from utils.auth_dependencies import get_current_user_role
+from utils.auth_dependencies import get_current_user_role, get_current_websocket_role, resolve_registered_user_id
 router = APIRouter(
     prefix="/predict",
     tags=["Predictors"],
-    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+)
+ws_router = APIRouter(
+    prefix="/predict",
+    tags=["Predictors"],
 )
 
 # Pydantic schemas
@@ -77,6 +84,44 @@ def get_db():
     finally:
         db.close()
 
+
+def _require_building_access(user: dict, building_id: int) -> None:
+    from utils.policies import has_permission
+
+    db = SessionLocal()
+    try:
+        user_id = resolve_registered_user_id(user, db)
+        if not has_permission(user_id, "building", building_id, db):
+            raise HTTPException(status_code=403, detail="You are not authorized for this building.")
+    finally:
+        db.close()
+
+
+def _get_allowed_socket_origins() -> set[str]:
+    origins = {
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:5173",
+    }
+    custom_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    if custom_origins:
+        origins.update(origin.strip() for origin in custom_origins.split(",") if origin.strip())
+    local_ip = os.getenv("LOCAL_NETWORK_IP")
+    local_ports = os.getenv("LOCAL_NETWORK_PORTS", "3000,3001,5173")
+    if local_ip:
+        for port in [port.strip() for port in local_ports.split(",") if port.strip()]:
+            origins.add(f"http://{local_ip}:{port}")
+    return origins
+
+
+def _is_allowed_socket_origin(origin: str | None) -> bool:
+    if not origin:
+        return True
+    return origin in _get_allowed_socket_origins()
+
 @router.post(
     "/",
     response_model=PredictorRead,
@@ -85,7 +130,11 @@ def get_db():
         500: {"description": "Internal server error"},
     },
 )
-def create_predictor(predictor: PredictorCreate, db: Annotated[Session, Depends(get_db)]):
+def create_predictor(
+    predictor: PredictorCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
     db_predictor = Predictor(**predictor.dict())
     db.add(db_predictor)
     db.commit()
@@ -103,7 +152,10 @@ def read_predictors(db: Annotated[Session, Depends(get_db)], skip: int = 0, limi
     return db.query(Predictor).offset(skip).limit(limit).all()
 
 @router.post("/predict_one")
-def predict_one(input_data: dict):
+def predict_one(
+    input_data: dict,
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
     # This is a placeholder for actual prediction logic
     # You can later load a model and return a prediction based on input_data
     return {"prediction": "This is a mock prediction", "input": input_data}
@@ -119,10 +171,7 @@ def predict_one(input_data: dict):
 )
 async def predict_hvac(request: HVACPredictionRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     """Predict temperature and energy consumption for HVAC operation schedule."""
-    from utils.policies import has_permission
-    user_id = user.get("user_id")
-    if user_id is None or not has_permission(user_id, "building", request.building_id, SessionLocal()):
-        raise HTTPException(status_code=403, detail="You are not authorized to predict HVAC for this building.")
+    _require_building_access(user, request.building_id)
     try:
         hvac_optimizer = HVACOptimizerService(request.building_id)
         safe_duration = clamp_duration(request.duration)
@@ -152,10 +201,7 @@ async def predict_hvac(request: HVACPredictionRequest, user: Annotated[dict, Dep
 )
 async def optimize_hvac_schedule(request: HVACOptimizationRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     """Optimize HVAC operation schedule for energy efficiency."""
-    from utils.policies import has_permission
-    user_id = user.get("user_id")
-    if user_id is None or not has_permission(user_id, "building", request.building_id, SessionLocal()):
-        raise HTTPException(status_code=403, detail="You are not authorized to optimize HVAC schedule for this building.")
+    _require_building_access(user, request.building_id)
     try:
         hvac_optimizer = HVACOptimizerService(request.building_id)
         safe_duration = clamp_duration(request.duration)
@@ -182,6 +228,113 @@ async def optimize_hvac_schedule(request: HVACOptimizationRequest, user: Annotat
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
+
+
+@ws_router.websocket("/hvac/optimize/ws")
+async def optimize_hvac_schedule_ws(
+    websocket: WebSocket,
+):
+    """Run HVAC optimization over WebSocket and stream progress/result updates."""
+    await websocket.accept()
+
+    try:
+        if not _is_allowed_socket_origin(websocket.headers.get("origin")):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Origin not allowed")
+            return
+
+        try:
+            user = get_current_websocket_role(["BUILDING_MANAGER", "ADMIN"])(websocket)
+        except HTTPException as exc:
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason=str(exc.detail),
+            )
+            return
+
+        payload = await websocket.receive_json()
+        request = HVACOptimizationRequest.model_validate(payload)
+        _require_building_access(user, request.building_id)
+
+        safe_duration = clamp_duration(request.duration)
+        started_at = perf_counter()
+
+        await websocket.send_json(
+            {
+                "type": "optimization.status",
+                "status": "accepted",
+                "building_id": request.building_id,
+                "optimization_type": request.optimization_type,
+                "duration": safe_duration,
+            }
+        )
+
+        await websocket.send_json(
+            {
+                "type": "optimization.status",
+                "status": "initializing_optimizer",
+            }
+        )
+        optimizer_init_started = perf_counter()
+        hvac_optimizer = await run_in_threadpool(HVACOptimizerService, request.building_id)
+        optimizer_init_seconds = round(perf_counter() - optimizer_init_started, 3)
+
+        await websocket.send_json(
+            {
+                "type": "optimization.status",
+                "status": "optimizer_ready",
+                "timing": {
+                    "optimizer_init_seconds": optimizer_init_seconds,
+                },
+            }
+        )
+
+        await websocket.send_json(
+            {
+                "type": "optimization.status",
+                "status": "running_optimization",
+            }
+        )
+
+        optimization_started = perf_counter()
+        result = await run_in_threadpool(
+            hvac_optimizer.get_optimization_recommendation,
+            request.starting_temperature,
+            request.starting_time,
+            request.outdoor_temperatures,
+            request.setpoint,
+            request.optimization_type == "peak",
+            safe_duration,
+            "dict",
+        )
+        optimization_seconds = round(perf_counter() - optimization_started, 3)
+        total_seconds = round(perf_counter() - started_at, 3)
+
+        await websocket.send_json(
+            {
+                "type": "optimization.completed",
+                "status": "completed",
+                "building_id": request.building_id,
+                "optimization_type": request.optimization_type,
+                "timing": {
+                    "optimizer_init_seconds": optimizer_init_seconds,
+                    "optimization_seconds": optimization_seconds,
+                    "total_seconds": total_seconds,
+                },
+                "result": result,
+            }
+        )
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        await websocket.send_json(
+            {
+                "type": "optimization.failed",
+                "status": "failed",
+                "detail": str(exc),
+            }
+        )
+    finally:
+        await websocket.close()
 
 @router.post(
     "/hvac/evaluate",
@@ -211,7 +364,7 @@ async def evaluate_metrics(request: HVACEvaluationRequest, user: Annotated[dict,
         500: {"description": "Failed to retrieve models"},
     },
 )
-async def get_all_hvac_models(user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+async def get_all_hvac_models(user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]):
     """Get all HVAC models across all locations."""
     from utils.policies import has_permission
     # Optionally filter models by user permission
@@ -231,12 +384,9 @@ async def get_all_hvac_models(user: Annotated[dict, Depends(get_current_user_rol
         500: {"description": "Failed to retrieve training history"},
     },
 )
-async def get_hvac_training_history(building_id: int, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+async def get_hvac_training_history(building_id: int, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]):
     """Get training history for a specific building."""
-    from utils.policies import has_permission
-    user_id = user.get("user_id")
-    if user_id is None or not has_permission(user_id, "building", building_id, SessionLocal()):
-        raise HTTPException(status_code=403, detail="You are not authorized to retrieve HVAC training history for this building.")
+    _require_building_access(user, building_id)
     try:
         hvac_optimizer = HVACOptimizerService(building_id)
         history = hvac_optimizer.get_training_history()
@@ -257,10 +407,7 @@ async def get_hvac_training_history(building_id: int, user: Annotated[dict, Depe
 )
 async def evaluate_hvac_schedule(request: HVACPredictionRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
     """Evaluate a specific HVAC operation schedule with detailed metrics."""
-    from utils.policies import has_permission
-    user_id = user.get("user_id")
-    if user_id is None or not has_permission(user_id, "building", request.building_id, SessionLocal()):
-        raise HTTPException(status_code=403, detail="You are not authorized to evaluate HVAC schedule for this building.")
+    _require_building_access(user, request.building_id)
     try:
         hvac_optimizer = HVACOptimizerService(request.building_id)
         safe_duration = clamp_duration(request.duration)

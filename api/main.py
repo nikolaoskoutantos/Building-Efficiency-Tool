@@ -12,6 +12,7 @@ from controllers.weather import router as weather_router
 from controllers.sensordata import router as sensordata_router
 from controllers.smartcontract import router as smartcontract_router
 from controllers.predict import router as predict_router
+from controllers.websocket_tasks import router as websocket_tasks_router
 from controllers.auth import router as auth_router
 from controllers.building_sensor_weather import router as building_sensor_weather_router
 from controllers.hvac import router as hvac_router
@@ -31,6 +32,7 @@ from models.rate import Rate  # Import Rate model to ensure table creation
 from models.predictor import Predictor, TrainingHistory  # Import updated models
 from models.knowledge import Knowledge
 from models.mqtt_config import MQTTBrokerConfig
+from utils.alembic_migrations import run_alembic_upgrade, should_run_startup_migrations
 from services.hvac_optimizer_service import HVACOptimizerService  # Import HVAC service
 from db.mock_data import insert_mock_data  # Updated import path
 from utils.sql import apply_sql_file
@@ -58,7 +60,13 @@ app = FastAPI(lifespan=lifespan)
 
 # Add session middleware for login/logout
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true"
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    same_site="lax",
+    https_only=SESSION_COOKIE_SECURE,
+)
 
 # Configure CORS origins from environment variables
 def get_cors_origins():
@@ -106,8 +114,19 @@ if os.path.isdir(vue_dist_path):
     app.mount("/", StaticFiles(directory=vue_dist_path, html=True), name="static")
 
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+
+def env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.lower() == "true"
+
+
+# Run Alembic migrations at startup only when explicitly enabled or in DEV mode.
+if should_run_startup_migrations():
+    run_alembic_upgrade()
+else:
+    print("[main.py] Skipping Alembic startup migration step")
 
 # Apply SQL bootstrap functions (idempotent CREATE OR REPLACE FUNCTION statements)
 try:
@@ -117,16 +136,26 @@ try:
 except Exception as e:
     print(f"[main.py] Warning: failed to apply db/update_function.sql: {e}")
 
-# Apply user settings migration (idempotent ALTER TABLE statements)
 try:
-    user_settings_migration_path = os.path.join(os.path.dirname(__file__), "db", "migration_user_settings.sql")
-    apply_sql_file(user_settings_migration_path, engine)
-    print("[main.py] Applied db/migration_user_settings.sql")
+    rating_functions_sql_path = os.path.join(os.path.dirname(__file__), "db", "rating_functions.sql")
+    apply_sql_file(rating_functions_sql_path, engine)
+    print("[main.py] Applied db/rating_functions.sql")
 except Exception as e:
-    print(f"[main.py] Warning: failed to apply db/migration_user_settings.sql: {e}")
+    print(f"[main.py] Warning: failed to apply db/rating_functions.sql: {e}")
 
-# Insert mock data if DEV mode is enabled
-if os.getenv("DEV", "false").lower() == "true":
+# Apply user settings migration (idempotent ALTER TABLE statements)
+user_settings_migration_path = os.path.join(os.path.dirname(__file__), "db", "migration_user_settings.sql")
+if os.path.exists(user_settings_migration_path):
+    try:
+        apply_sql_file(user_settings_migration_path, engine)
+        print("[main.py] Applied db/migration_user_settings.sql")
+    except Exception as e:
+        print(f"[main.py] Warning: failed to apply db/migration_user_settings.sql: {e}")
+else:
+    print("[main.py] Skipping db/migration_user_settings.sql because the file does not exist")
+
+# Insert mock data only in DEV mode unless explicitly disabled.
+if env_flag("DEV", False) and env_flag("RUN_MOCK_DATA_ON_STARTUP", True):
     try:
         print("[main.py] DEV mode enabled: inserting mock data...")
         insert_mock_data()
@@ -142,6 +171,7 @@ app.include_router(weather_router)
 app.include_router(sensordata_router)
 app.include_router(smartcontract_router)
 app.include_router(predict_router)
+app.include_router(websocket_tasks_router)
 app.include_router(building_sensor_weather_router)
 app.include_router(hvac_router)
 app.include_router(acl_router)

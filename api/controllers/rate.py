@@ -13,12 +13,11 @@ import os
 # Error message constants
 RATE_NOT_FOUND_MSG = "Rate not found"
 
-from utils.auth_dependencies import get_current_user_role
-from utils.policies import has_permission
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user
 router = APIRouter(
     prefix="/rates",
     tags=["Rates"],
-    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 )
 
 # Get encryption key from environment
@@ -46,6 +45,10 @@ class ServiceScore(BaseModel):
     total_ratings: int
     rating_distribution: dict
 
+
+def _require_registered_user(user_payload: dict, db: Session):
+    return resolve_registered_user(user_payload, db)
+
 @router.post(
     "/submit",
     responses={
@@ -58,7 +61,7 @@ def submit_user_rating(
     rate: RateCreate,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 ):
     """
     Submit or update a rating for a service with encrypted wallet.
@@ -68,12 +71,9 @@ def submit_user_rating(
         # Get current user from your existing auth system
         current_user = get_current_user(request)
         wallet_address = current_user.get("wallet")
-        user_id = user.get("user_id")
+        _require_registered_user(user, db)
         if not wallet_address:
             raise HTTPException(status_code=400, detail="Wallet address required for rating")
-        # Resource-level permission: user can only rate services they are allowed to
-        if user_id is None or not has_permission(user_id, "service", rate.service_id, db):
-            raise HTTPException(status_code=403, detail="You are not authorized to rate this service.")
         
         from sqlalchemy import text
         
@@ -170,14 +170,16 @@ def submit_user_rating(
         500: {"description": "Database error"},
     },
 )
-def get_service_rating_score(service_id: int, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+def get_service_rating_score(
+    service_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     """
     Get aggregated score and statistics for a service.
     """
     try:
-        user_id = user.get("user_id")
-        if user_id is None or not has_permission(user_id, "service", service_id, db):
-            raise HTTPException(status_code=403, detail="You are not authorized to view this service's ratings.")
+        _require_registered_user(user, db)
         result = get_service_score(db, service_id)
         if not result or result.total_ratings == 0:
             raise HTTPException(status_code=404, detail="No ratings found for this service")
@@ -204,7 +206,7 @@ def get_service_rating_score(service_id: int, db: Annotated[Session, Depends(get
 def get_my_ratings(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 ):
     """
     Get all ratings submitted by the current user.
@@ -212,12 +214,9 @@ def get_my_ratings(
     try:
         current_user = get_current_user(request)
         wallet_address = current_user.get("wallet")
-        user_id = user.get("user_id")
         if not wallet_address:
             raise HTTPException(status_code=400, detail="Wallet address required")
-        # Resource-level permission: user can only view their own ratings
-        if user_id is None:
-            raise HTTPException(status_code=403, detail="You are not authorized to view these ratings.")
+        _require_registered_user(user, db)
         
         ratings = get_user_ratings(db, wallet_address)
         
@@ -248,11 +247,13 @@ def get_my_ratings(
         500: {"description": "Database error"},
     },
 )
-def create_rate(rate: RateCreate, db: Annotated[Session, Depends(get_db)], user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+def create_rate(
+    rate: RateCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     """Legacy endpoint - consider using /submit instead for encrypted ratings"""
-    user_id = user.get("user_id")
-    if user_id is None or not has_permission(user_id, "service", rate.service_id, db):
-        raise HTTPException(status_code=403, detail="You are not authorized to create a rating for this service.")
+    _require_registered_user(user, db)
     db_rate = Rate(**rate.dict())
     db.add(db_rate)
     db.commit()
@@ -266,8 +267,14 @@ def create_rate(rate: RateCreate, db: Annotated[Session, Depends(get_db)], user:
         500: {"description": "Database error"},
     },
 )
-def read_rates(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: int = 100):
+def read_rates(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))],
+    skip: int = 0,
+    limit: int = 100
+):
     try:
+        _require_registered_user(user, db)
         return db.query(Rate).offset(skip).limit(limit).all()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -280,8 +287,13 @@ def read_rates(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: in
         500: {"description": "Database error"},
     },
 )
-def read_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
+def read_rate(
+    rate_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     try:
+        _require_registered_user(user, db)
         rate = db.query(Rate).filter(Rate.id == rate_id).first()
         if not rate:
             raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
@@ -299,8 +311,14 @@ def read_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
         500: {"description": "Database error"},
     },
 )
-def update_rate(rate_id: int, rate: RateCreate, db: Annotated[Session, Depends(get_db)]):
+def update_rate(
+    rate_id: int,
+    rate: RateCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     try:
+        _require_registered_user(user, db)
         db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
         if not db_rate:
             raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
@@ -321,8 +339,13 @@ def update_rate(rate_id: int, rate: RateCreate, db: Annotated[Session, Depends(g
         500: {"description": "Database error"},
     },
 )
-def delete_rate(rate_id: int, db: Annotated[Session, Depends(get_db)]):
+def delete_rate(
+    rate_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     try:
+        _require_registered_user(user, db)
         db_rate = db.query(Rate).filter(Rate.id == rate_id).first()
         if not db_rate:
             raise HTTPException(status_code=404, detail=RATE_NOT_FOUND_MSG)
@@ -347,13 +370,18 @@ class RateTestCreate(BaseModel):
         500: {"description": "Upsert test error"},
     },
 )
-def test_upsert_functionality(rate: RateTestCreate, db: Annotated[Session, Depends(get_db)]):
+def test_upsert_functionality(
+    rate: RateTestCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     """
     Test endpoint that demonstrates UPSERT with encrypted wallet addresses.
     Same wallet + same service = UPDATE existing rating.
     This endpoint is for testing only - remove in production.
     """
     try:
+        _require_registered_user(user, db)
         from sqlalchemy import text
         
         # First encrypt the wallet address using deterministic encryption
@@ -449,12 +477,16 @@ def test_upsert_functionality(rate: RateTestCreate, db: Annotated[Session, Depen
         500: {"description": "View data error"},
     },
 )
-def view_encrypted_data(db: Annotated[Session, Depends(get_db)]):
+def view_encrypted_data(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     """
     View all stored encrypted data in the database.
     This endpoint is for testing only - remove in production.
     """
     try:
+        _require_registered_user(user, db)
         from sqlalchemy import text
         
         result = db.execute(text("""

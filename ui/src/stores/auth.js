@@ -219,7 +219,7 @@ export const useAuthStore = defineStore('auth', {
 
     // JWT Token Management
     setJwtToken(token) {
-      console.log('💾 Setting JWT token:', token ? token.substring(0, 20) + '...' : 'null')
+      console.log('💾 Setting JWT token:', token ? '[present]' : 'null')
       this.jwtToken = token
       // Store JWT in localStorage for persistence
       if (token) {
@@ -325,7 +325,6 @@ export const useAuthStore = defineStore('auth', {
       console.log('🔍 Current Auth State:', {
         isAuthenticated: this.isAuthenticated,
         hasJwtToken: !!this.getJwtToken(),
-        jwtToken: this.getJwtToken()?.substring(0, 20) + '...',
         userProfile: this.userProfile,
         walletAddress: this.walletAddress,
         sessionToken: this.sessionToken

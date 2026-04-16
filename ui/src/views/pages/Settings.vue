@@ -2,8 +2,8 @@
   <CContainer>
     <CRow>
       <CCol :xs="12">
-        <CCard>
-          <CCardHeader>
+        <CCard class="settings-shell">
+          <CCardHeader class="settings-shell__header">
             <h4 class="mb-0">
               <CIcon name="cilSettings" class="me-2" />
               User Settings
@@ -22,8 +22,8 @@
 
             <form @submit.prevent="saveSettings">
               <!-- Personal Information Section -->
-              <CCard class="mb-4">
-                <CCardHeader class="bg-light">
+              <CCard class="mb-4 settings-section-card">
+                <CCardHeader class="settings-section-card__header">
                   <h6 class="mb-0">
                     <CIcon name="cilUser" class="me-2" />
                     Personal Information
@@ -42,7 +42,7 @@
                         <CFormLabel for="phone">Phone Number</CFormLabel>
                         <CInputGroup>
                           <CInputGroupText>
-                            <CIcon name="cilPhone" />
+                            <CIcon icon="cil-phone" />
                           </CInputGroupText>
                           <CFormInput
                             id="phone"
@@ -92,8 +92,8 @@
               </CCard>
 
               <!-- Building Management Section -->
-              <CCard class="mb-4">
-                <CCardHeader class="bg-light">
+              <CCard class="mb-4 settings-section-card">
+                <CCardHeader class="settings-section-card__header">
                   <h6 class="mb-0">
                     <CIcon name="cilBuilding" class="me-2" />
                     Building Management
@@ -144,8 +144,8 @@
               </CCard>
 
               <!-- Blockchain/Wallet Section -->
-              <CCard class="mb-4">
-                <CCardHeader class="bg-light">
+              <CCard class="mb-4 settings-section-card">
+                <CCardHeader class="settings-section-card__header">
                   <h6 class="mb-0">
                     <CIcon name="cilWallet" class="me-2" />
                     Blockchain & Wallet Settings
@@ -361,6 +361,7 @@
 import axios from 'axios';
 import { ethers } from 'ethers';
 import { useAuthStore } from '@/stores/auth';
+import { buildRoleAwareErrorMessage } from '@/utils/apiErrors';
 
 export default {
   name: 'Settings',
@@ -430,6 +431,10 @@ export default {
   },
 
   methods: {
+    getFriendlyBackendError(status, payload, fallbackMessage) {
+      return buildRoleAwareErrorMessage(status, payload, fallbackMessage)
+    },
+
     async initializeSettings() {
       // Load user settings first
       await this.loadSettings()
@@ -464,7 +469,18 @@ export default {
         this.settings.public_key = response.data.public_key || '';
       } catch (error) {
         console.error('Failed to load system preferences from backend:', error);
-        this.showAlert('warning', 'Failed to load system preferences from backend. Please check your connection.');
+        if (error.response) {
+          this.showAlert(
+            'warning',
+            this.getFriendlyBackendError(
+              error.response.status,
+              error.response.data,
+              'Failed to load system preferences from backend. Please check your connection.',
+            ),
+          );
+        } else {
+          this.showAlert('warning', 'Failed to load system preferences from backend. Please check your connection.');
+        }
       }
     },
 
@@ -529,12 +545,19 @@ export default {
             }
           });
           if (response.status !== 200 && response.status !== 201) {
-            this.showAlert('danger', `Backend error: ${response.status} ${response.statusText}`);
+            this.showAlert('danger', this.getFriendlyBackendError(response.status, response.data, `Backend error: ${response.status} ${response.statusText}`));
             console.error('Backend error:', response);
           }
         } catch (error) {
           if (error.response) {
-            this.showAlert('danger', `Backend error: ${error.response.status} ${error.response.data.detail || error.response.statusText}`);
+            this.showAlert(
+              'danger',
+              this.getFriendlyBackendError(
+                error.response.status,
+                error.response.data,
+                `Backend error: ${error.response.status} ${error.response.statusText}`,
+              ),
+            );
             console.error('Backend error:', error.response);
           } else {
             this.showAlert('danger', 'Failed to save settings. Please check your backend connection.');
@@ -590,7 +613,8 @@ export default {
           console.warn('Failed to load buildings:', response.status, response.statusText)
           this.buildings = []
           if (response.status !== 404) { // Don't show error for empty buildings
-            this.showAlert('warning', 'Failed to load buildings. You can add buildings using the button below.')
+            const payload = await response.json().catch(() => null)
+            this.showAlert('warning', this.getFriendlyBackendError(response.status, payload, 'Failed to load buildings. You can add buildings using the button below.'))
           }
         }
       } catch (error) {
@@ -629,7 +653,18 @@ export default {
               });
             } catch (error) {
               console.error('Failed to delete personal data from backend:', error);
-              this.showAlert('warning', 'Failed to delete personal data from backend. Please check your connection.');
+              if (error.response) {
+                this.showAlert(
+                  'warning',
+                  this.getFriendlyBackendError(
+                    error.response.status,
+                    error.response.data,
+                    'Failed to delete personal data from backend. Please check your connection.',
+                  ),
+                );
+              } else {
+                this.showAlert('warning', 'Failed to delete personal data from backend. Please check your connection.');
+              }
             }
         } catch (error) {
           console.error('Failed to delete personal data:', error)
@@ -907,6 +942,79 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.settings-shell {
+  border: 1px solid rgba(37, 99, 235, 0.08);
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+}
+
+.settings-shell__header {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.settings-shell :deep(.card-body) {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
+.settings-section-card {
+  border: 1px solid rgba(37, 99, 235, 0.08);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.05);
+}
+
+.settings-section-card__header {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.06), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(244, 247, 251, 1) 100%) !important;
+  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.settings-section-card :deep(.card-body) {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.04), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
+.settings-shell h4,
+.settings-section-card h6 {
+  color: #132238;
+  font-weight: 700;
+}
+
+.settings-section-card :deep(.form-label) {
+  color: #445066;
+  font-weight: 600;
+}
+
+.settings-section-card :deep(.form-control),
+.settings-section-card :deep(.form-select),
+.settings-section-card :deep(.form-textarea),
+.settings-section-card :deep(.input-group-text) {
+  border-color: rgba(19, 34, 56, 0.12);
+}
+
+.settings-section-card :deep(.form-control),
+.settings-section-card :deep(.form-select),
+.settings-section-card :deep(textarea) {
+  border-radius: 12px;
+}
+
+.settings-section-card :deep(.input-group-text) {
+  border-radius: 12px 0 0 12px;
+  background: rgba(248, 250, 252, 0.95);
+}
+
+.settings-shell :deep(.btn) {
+  border-radius: 12px;
+}
+</style>
 
 <style scoped>
 .form-text {

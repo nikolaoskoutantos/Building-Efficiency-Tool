@@ -23,16 +23,20 @@ if not SQLALCHEMY_DATABASE_URL:
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
-# Always define async_session_maker for FastAPI async support
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-
-if SQLALCHEMY_DATABASE_URL.startswith("postgresql+asyncpg"):
-    async_engine = create_async_engine(SQLALCHEMY_DATABASE_URL)
-else:
-    # Fallback: convert sync URL to asyncpg if needed
-    async_url = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+# Define async DB helpers when asyncpg is available. This keeps sync-only scripts
+# usable even in lighter local environments.
+async_engine = None
+async_session_maker = None
+try:
+    if SQLALCHEMY_DATABASE_URL.startswith("postgresql+asyncpg"):
+        async_url = SQLALCHEMY_DATABASE_URL
+    else:
+        async_url = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
     async_engine = create_async_engine(async_url)
-async_session_maker = async_sessionmaker(async_engine, expire_on_commit=False)
+    async_session_maker = async_sessionmaker(async_engine, expire_on_commit=False)
+except ModuleNotFoundError as exc:
+    if exc.name != "asyncpg":
+        raise
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

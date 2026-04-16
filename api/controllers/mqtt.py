@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 from db.connection import get_db
 from models.mqtt_config import MQTTBrokerConfig
 
-from utils.auth_dependencies import get_current_user_role
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
 router = APIRouter(
     prefix="/mqtt",
     tags=["MQTT"],
-    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 )
 
 # String constants to avoid duplication (SonarQube S1192)
@@ -114,7 +114,7 @@ def get_mqtt_config(db: Annotated[Session, Depends(get_db)]):
 def get_device_mqtt_info(
     device_id: int,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 ):
     """Get MQTT publishing information for a specific device (with permission check)"""
     from utils.policies import has_permission
@@ -128,7 +128,7 @@ def get_device_mqtt_info(
         device = db.query(HVACUnit).filter(HVACUnit.id == device_id).first()
         if not device:
             raise HTTPException(status_code=404, detail=DEVICE_NOT_FOUND)
-        user_id = user.get("user_id")
+        user_id = resolve_registered_user_id(user, db)
         if user_id is None or not has_permission(user_id, "device", device.id, db):
             raise HTTPException(status_code=403, detail="You are not authorized to access this device's MQTT info.")
         return DeviceMQTTInfo(
@@ -156,7 +156,7 @@ def get_device_mqtt_info(
 def get_sensor_mqtt_info(
     sensor_id: int,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 ):
     """Get MQTT publishing information for a specific sensor (with permission check)"""
     from utils.policies import has_permission
@@ -166,7 +166,7 @@ def get_sensor_mqtt_info(
         sensor = db.query(Sensor).filter(Sensor.id == sensor_id).first()
         if not sensor:
             raise HTTPException(status_code=404, detail=SENSOR_NOT_FOUND)
-        user_id = user.get("user_id")
+        user_id = resolve_registered_user_id(user, db)
         if user_id is None or not has_permission(user_id, "sensor", sensor.id, db):
             raise HTTPException(status_code=403, detail="You are not authorized to access this sensor's MQTT info.")
         # Get MQTT config

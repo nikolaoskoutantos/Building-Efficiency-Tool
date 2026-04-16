@@ -22,6 +22,10 @@ services:
       - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
 
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=600s
+      - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=600s
+      - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=600s
+
     ports:
       - "80:80"
       - "443:443"
@@ -39,6 +43,8 @@ services:
       - traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/authz/forward-auth
       - traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true
       - traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email
+      - traefik.http.middlewares.mlflow-buffering.buffering.maxRequestBodyBytes=209715200
+      - traefik.http.middlewares.mlflow-buffering.buffering.memRequestBodyBytes=209715200
 
 
   ui:
@@ -110,6 +116,8 @@ services:
       --backend-store-uri sqlite:////mlflow/mlflow.db
       --artifacts-destination /mlflow/artifacts
       --serve-artifacts
+      --uvicorn-opts "--forwarded-allow-ips=*"
+      --disable-security-middleware
 
     networks:
       - proxy
@@ -121,8 +129,10 @@ services:
       - traefik.http.routers.mlflow.rule=Host(`mlflow.nkoutantos.com`)
       - traefik.http.routers.mlflow.entrypoints=websecure
       - traefik.http.routers.mlflow.tls.certresolver=le
-      - traefik.http.routers.mlflow.middlewares=authelia@docker
+      - traefik.http.routers.mlflow.middlewares=authelia@docker,mlflow-buffering@docker
       - traefik.http.services.mlflow.loadbalancer.server.port=5000
+      - traefik.http.services.mlflow.loadbalancer.responseforwarding.flushinterval=100ms
+      
     ports:
       - "5000:5000"
 
@@ -167,6 +177,7 @@ services:
     volumes:
       - emqx-data:/opt/emqx/data
       - emqx-log:/opt/emqx/log
+      - ./emqx/base.hocon:/opt/emqx/etc/base.hocon:ro
     ports:
       - "18083:18083"
 
@@ -193,7 +204,8 @@ services:
     env_file:
       - .env
     command: authelia --config /config/configuration.yml
-
+    environment:
+      - AUTHELIA_NTP_DISABLE_STARTUP_CHECK=true
     depends_on:
       - redis
 
@@ -233,8 +245,13 @@ services:
     env_file:
       - .env
 
+    environment:
+      - TZ=UTC
+
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "timezone=UTC"]
 
     ports:
       - "5444:5432"
@@ -255,4 +272,5 @@ volumes:
 
 networks:
   proxy:
+    name: proxy
   internal:

@@ -123,7 +123,8 @@ def _expand_hourly_to_5min_rows(lat, lon, hourly):
 
 async def save_open_meteo_hourly(async_db: AsyncSession, weather_json: dict):
     """
-    Parses Open-Meteo hourly response and upserts ALL hours into weather_data with unique key ("timestamp", lat, lon).
+    Parses Open-Meteo hourly response and replaces stored weather rows for the
+    target location with the latest Open-Meteo forecast.
     """
     lat = float(weather_json["latitude"])
     lon = float(weather_json["longitude"])
@@ -150,6 +151,19 @@ async def save_open_meteo_hourly(async_db: AsyncSession, weather_json: dict):
     """)
 
     rows = _expand_hourly_to_5min_rows(lat, lon, hourly)
+    # Keep weather_data authoritative to the latest provider payload for a
+    # location so stale mock/demo rows do not keep leaking into the UI.
+    await async_db.execute(
+        text(
+            """
+            DELETE FROM weather_data
+            WHERE lat = :lat
+              AND lon = :lon
+            """
+        ),
+        {"lat": lat, "lon": lon},
+    )
+
     for row in rows:
         await async_db.execute(stmt, row)
 

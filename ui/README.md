@@ -51,6 +51,43 @@ All public config is set in `.env` (see `.env.example`). Key variables:
 
 The UI expects the backend API to be running and accessible at the URL set in `VITE_API_BASE_URL`. For local development, ensure the API is running and port 8000 is published.
 
+## WebSocket Task Layer
+
+The reusable WebSocket task client lives at `src/composables/useWebSocket.ts`.
+
+- Backend endpoint: `/ws/{task_id}`
+- First client message must be `{ "type": "auth", "token": "<jwt>" }`
+- The composable automatically answers server `ping` messages with `pong`
+- Built-in reactive state: `progress`, `alerts`, `result`, `error`, `status`
+
+Example:
+
+```ts
+import { useWebSocket } from '@/composables/useWebSocket'
+
+const socket = useWebSocket('counter-demo', jwtToken)
+await socket.connect()
+```
+
+### Extending with a new message type
+
+1. Add the new Pydantic message model in `api/utils/ws_protocol.py`.
+2. Update the backend parser/sender switch in `api/controllers/websocket_tasks.py`.
+3. Add the matching TypeScript interface and client-side handler branch in `src/composables/useWebSocket.ts`.
+4. If the new message is task-specific, emit it from the relevant handler in `api/services/websocket_tasks.py`.
+
+### Building-scoped task authorization
+
+For any WebSocket task that operates on a building, validate building access from the JWT-derived user before doing any real work:
+
+```py
+async def my_task(ctx: TaskExecutionContext) -> None:
+    ctx.require_building_access(building_id)
+    ...
+```
+
+The generic WebSocket layer resolves the registered user from the JWT and exposes the same building permission guard pattern used by the HTTP controllers (`resolve_registered_user_id(...)` + `has_permission(..., "building", building_id, db)`).
+
 ## Project Structure
 
 - `src/` — Main source code (components, views, stores, router, etc.)

@@ -10,5 +10,6 @@ export default [
     name: 'Device & Sensors',
     to: '/device-registration',
     icon: 'cilAvTimer',
+    roles: ['BUILDING_MANAGER', 'ADMIN'],
   },
 ]

@@ -25,11 +25,11 @@ def get_db():
 
 DbSession = Annotated[Session, Depends(get_db)]
 
-from utils.auth_dependencies import get_current_user_role
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
 router = APIRouter(
     prefix="/schedules",
     tags=["HVAC Schedules"],
-    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 )
 
 
@@ -72,17 +72,19 @@ class ScheduleRead(ScheduleCreate):
 def get_schedules(
     hvac_id: int = None,
     db: DbSession = None,
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))] = None
 ):
     from utils.policies import has_permission
-    user_id = user.get("user_id") if user else None
+    user_id = resolve_registered_user_id(user, db) if user else None
     q = db.query(HVACScheduleInterval)
     if hvac_id is not None:
         # Permission check for HVAC unit
         if user_id is None or not has_permission(user_id, "device", hvac_id, db):
             raise HTTPException(status_code=403, detail="You are not authorized to access this HVAC unit's schedules.")
         q = q.filter(HVACScheduleInterval.hvac_unit_id == hvac_id)
-    return q.order_by(HVACScheduleInterval.created_at.desc()).all()
+        return q.order_by(HVACScheduleInterval.created_at.desc()).all()
+    schedules = q.order_by(HVACScheduleInterval.created_at.desc()).all()
+    return [schedule for schedule in schedules if has_permission(user_id, "device", schedule.hvac_unit_id, db)]
 
 @router.post(
     "/",
@@ -109,7 +111,7 @@ def create_schedule(
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
 ):
     from utils.policies import has_permission
-    user_id = user.get("user_id") if user else None
+    user_id = resolve_registered_user_id(user, db) if user else None
     if user_id is None or not has_permission(user_id, "device", schedule.hvac_id, db):
         raise HTTPException(status_code=403, detail="You are not authorized to create schedules for this HVAC unit.")
     # For compatibility, create one interval per period
@@ -151,10 +153,10 @@ def create_schedule(
 def get_schedule(
     schedule_id: int,
     db: DbSession = None,
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))] = None
 ):
     from utils.policies import has_permission
-    user_id = user.get("user_id") if user else None
+    user_id = resolve_registered_user_id(user, db) if user else None
     schedule = db.query(HVACScheduleInterval).filter(HVACScheduleInterval.id == schedule_id).first()
     if not schedule:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
@@ -188,7 +190,7 @@ def update_schedule(
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
 ):
     from utils.policies import has_permission
-    user_id = user.get("user_id") if user else None
+    user_id = resolve_registered_user_id(user, db) if user else None
     db_schedule = db.query(HVACScheduleInterval).filter(HVACScheduleInterval.id == schedule_id).first()
     if not db_schedule:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
@@ -226,7 +228,7 @@ def delete_schedule(
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
 ):
     from utils.policies import has_permission
-    user_id = user.get("user_id") if user else None
+    user_id = resolve_registered_user_id(user, db) if user else None
     db_schedule = db.query(HVACScheduleInterval).filter(HVACScheduleInterval.id == schedule_id).first()
     if not db_schedule:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)

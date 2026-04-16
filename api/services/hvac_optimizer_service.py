@@ -4,9 +4,11 @@ import sys
 import json
 import hashlib
 import statistics
+import socket
 from datetime import datetime, timedelta, timezone
 from itertools import combinations
 from typing import List, Tuple, Dict, Optional, Any
+from urllib.parse import urlparse
 
 # --- Third-Party Imports ---
 import pandas as pd
@@ -21,18 +23,29 @@ from dotenv import load_dotenv
 
 # --- MLflow Setup ---
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
-import mlflow
-from mlflow.tracking import MlflowClient
+try:
+    import mlflow
+    from mlflow.tracking import MlflowClient
+except ModuleNotFoundError:
+    mlflow = None
+    MlflowClient = None
 
 # --- Path Setup (if needed for local imports) ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Set MLflow tracking URI from .env or default to localhost
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-mlflow_client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+if mlflow is not None and MlflowClient is not None:
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow_client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+else:
+    mlflow_client = None
 
 from db import SessionLocal
+from utils.building_sensor_weather_snapshot import (
+    create_snapshot_batch,
+    fetch_building_sensor_weather_rows,
+)
 
 # --- Deduplicated String Literals ---
 MODEL_TYPE = "hvac_optimizer"
@@ -62,10 +75,12 @@ PREDICTOR = "predictor"
 KNOWLEDGE = "knowledge"
 SENSOR = "sensor"
 ERR_MODEL_NOT_TRAINED = "HVAC model is not ready. Train or load MLflow models first."
+ERR_MLFLOW_UNAVAILABLE = "MLflow tracking server is unavailable."
 
 
 class HVACOptimizerService:
         RF_MODEL_NAME = "energy_temp_rf"
+        LEGACY_RF_MODEL_NAME = "hvac_random_forest"
 
 
         def _load_random_forest_from_mlflow(self) -> bool:
@@ -73,22 +88,54 @@ class HVACOptimizerService:
             Load random forest model and optional avg_consumption_off from latest MLflow model version for this building.
             Expects model registered under RF_MODEL_NAME and tagged with buildingID.
             """
-            import mlflow
+            if mlflow is None or MlflowClient is None:
+                print("MLflow is not installed in this environment, cannot load registered models.")
+                self.model_load_error = "MLflow is not installed in this environment."
+                return False
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
             mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
             building_id = str(self.building_id)
             try:
+                parsed_uri = urlparse(MLFLOW_TRACKING_URI)
+                if parsed_uri.hostname and parsed_uri.port:
+                    try:
+                        with socket.create_connection((parsed_uri.hostname, parsed_uri.port), timeout=1.5):
+                            pass
+                    except OSError as exc:
+                        self.model_load_error = f"{ERR_MLFLOW_UNAVAILABLE} {exc}"
+                        print(self.model_load_error)
+                        self.rf_model = None
+                        return False
+
                 client = MlflowClient(tracking_uri=mlflow.get_tracking_uri(), registry_uri=mlflow.get_registry_uri())
-                versions = client.search_model_versions(
-                    f"name = '{self.RF_MODEL_NAME}' and tags.buildingID = '{building_id}'"
-                )
-                if not versions:
-                    print(f"No model versions for {self.RF_MODEL_NAME} with buildingID={building_id}")
+                candidate_model_names = [self.RF_MODEL_NAME, self.LEGACY_RF_MODEL_NAME]
+                latest = None
+                chosen_model_name = None
+
+                for model_name in candidate_model_names:
+                    versions = client.search_model_versions(
+                        f"name = '{model_name}' and tags.buildingID = '{building_id}'"
+                    )
+                    if not versions:
+                        continue
+
+                    latest = max(versions, key=lambda mv: mv.creation_timestamp)
+                    chosen_model_name = model_name
+                    break
+
+                if latest is None or chosen_model_name is None:
+                    print(
+                        f"No model versions found for {candidate_model_names} "
+                        f"with buildingID={building_id}"
+                    )
+                    self.model_load_error = (
+                        f"No MLflow model versions found for building {building_id}."
+                    )
                     return False
 
-                latest = max(versions, key=lambda mv: mv.creation_timestamp)
-                model_uri = f"models:/{self.RF_MODEL_NAME}/{latest.version}"
+                model_uri = f"models:/{chosen_model_name}/{latest.version}"
                 self.rf_model = mlflow.sklearn.load_model(model_uri)
+                self.model_load_error = None
 
                 # Load a_coefficient and avg_consumption_off from tags
                 if latest.tags:
@@ -101,11 +148,12 @@ class HVACOptimizerService:
 
                 print(
                     f"Loaded Random Forest model from MLflow for building {self.building_id} "
-                    f"(version {latest.version})"
+                    f"from '{chosen_model_name}' (version {latest.version})"
                 )
                 return True
             except Exception as e:
                 print(f"Error fetching Random Forest model from MLflow: {e}")
+                self.model_load_error = f"Failed to load MLflow model: {e}"
                 self.rf_model = None
                 return False
 
@@ -132,6 +180,7 @@ class HVACOptimizerService:
             self.avg_consumption_off = None  # Average energy consumption when HVAC OFF
             self.rf_model = None  # Random Forest model for HVAC ON
             self.model_id = None  # Database ID of the loaded model
+            self.model_load_error = None
 
             # Fetch lat/lon from DB and load model
             print("[HVACOptimizerService] Initializing location and models...")
@@ -145,9 +194,19 @@ class HVACOptimizerService:
             print(f"[HVACOptimizerService] Data fetch took {time.time() - t1:.2f} seconds")
 
         def _generate_operation(self, duration: int, switches, starting_operation: int) -> List[int]:
-            """Generate an operation schedule based on switches and starting operation."""
-            operation = [starting_operation]
+            """Generate the 12-step service schedule used by the app/API."""
             current = starting_operation
+            operation: List[int] = []
+            for i in range(duration):
+                if i in switches:
+                    current ^= 1
+                operation.append(current)
+            return operation
+
+        def _generate_notebook_operation(self, duration: int, switches, starting_operation: int) -> List[int]:
+            """Generate the raw notebook optimizer output (initial state + duration steps)."""
+            current = starting_operation
+            operation: List[int] = [current]
             for i in range(duration):
                 if i in switches:
                     current ^= 1
@@ -164,32 +223,15 @@ class HVACOptimizerService:
         def _fetch_building_sensor_weather(self):
             """Fetch building sensor weather data as a DataFrame."""
             import pandas as pd
-            from sqlalchemy import text
             db = SessionLocal()
             try:
-                # Use specific historical time range where data exists   
-                # Based on your database data: 17:00:00 to 18:00:00
-                if self.start_time is None and self.end_time is None:
-                    # Use historical time range where we know data exists
-                    from datetime import datetime
-                    start = datetime(2026, 3, 2, 17, 0, 0)  # 17:00:00
-                    end = datetime(2026, 3, 2, 18, 0, 0)    # 18:00:00
-                else:
-                    # Use user-provided range
-                    from datetime import datetime, timedelta, timezone
-                    end = self.end_time or datetime.now(timezone.utc)
-                    start = self.start_time or (end - timedelta(hours=1))
-                
-                # Debug: Print the exact time range being queried
+                start, end = self._resolve_query_window()
                 print("DEBUG: Querying time range:")
                 print(f"  start: {start}")
                 print(f"  end: {end}")
-                
-                query = text("SELECT * FROM public.get_building_sensor_weather(:bid, :start, :end)")
-                result = db.execute(query, {'bid': self.building_id, 'start': start, 'end': end})
-                rows = result.fetchall()
-                columns = result.keys()
-                df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame()
+
+                rows = fetch_building_sensor_weather_rows(db, self.building_id, start, end)
+                df = pd.DataFrame(rows) if rows else pd.DataFrame()
                 
                 # Debug: Print sample of actual fetched data
                 print(f"DEBUG: Fetched {len(df)} rows")
@@ -200,6 +242,32 @@ class HVACOptimizerService:
                     print(df.head(3).to_string())
                 
                 return df
+            finally:
+                db.close()
+
+        def _resolve_query_window(self):
+            if self.start_time is None and self.end_time is None:
+                start = datetime(2026, 3, 2, 17, 0, 0)
+                end = datetime(2026, 3, 2, 18, 0, 0)
+            else:
+                end = self.end_time or datetime.now(timezone.utc)
+                start = self.start_time or (end - timedelta(hours=1))
+            return start, end
+
+        def create_input_snapshot(self, created_by_user_id: int | None = None, source_label: str = "hvac_optimizer_service"):
+            db = SessionLocal()
+            try:
+                start, end = self._resolve_query_window()
+                rows = fetch_building_sensor_weather_rows(db, self.building_id, start, end)
+                return create_snapshot_batch(
+                    db,
+                    building_id=self.building_id,
+                    start_time=start,
+                    end_time=end,
+                    rows=rows,
+                    created_by_user_id=created_by_user_id,
+                    source_label=source_label,
+                )
             finally:
                 db.close()
 
@@ -234,6 +302,9 @@ class HVACOptimizerService:
         def _load_random_forest_model(self) -> bool:
             """Load Random Forest model for the current building from MLflow."""
             return self._load_random_forest_from_mlflow()
+
+        def _get_model_not_ready_error(self) -> str:
+            return self.model_load_error or ERR_MODEL_NOT_TRAINED
             
         def _transform_data_for_rf(self) -> pd.DataFrame:
             """
@@ -320,11 +391,11 @@ class HVACOptimizerService:
                 Tuple of (total_energy_consumption, temperature_predictions)
             """
             if not self._is_model_ready():
-                raise ValueError(ERR_MODEL_NOT_TRAINED)
+                raise ValueError(self._get_model_not_ready_error())
             
             temp = [starting_temp]
             start = datetime.strptime(starting_time, '%d/%m/%Y %H:%M')
-            h, m, d, month, dayofweek = start.hour, start.minute, start.day, start.month, start.weekday()
+            h, m, d, month, _ = start.hour, start.minute, start.day, start.month, start.weekday()
             
             total_cons = 0
             
@@ -336,7 +407,9 @@ class HVACOptimizerService:
                         'stp': [setpoint],
                         'hour': [h],
                         'minute': [m],
-                        'dayofweek': [dayofweek],
+                        # Match the notebook's inference logic exactly, even though it
+                        # uses day-of-month rather than weekday for this feature.
+                        'dayofweek': [d],
                         'month': [month]
                     })
                     pred = self.rf_model.predict(df)
@@ -370,7 +443,7 @@ class HVACOptimizerService:
                 Dict containing energy consumption, comfort penalty, switch penalty, temperatures, and total score
             """
             if not self._is_model_ready():
-                raise ValueError(ERR_MODEL_NOT_TRAINED)
+                raise ValueError(self._get_model_not_ready_error())
             
             comfort_penalty_weight = 50
             switch_penalty_weight = 10
@@ -407,7 +480,7 @@ class HVACOptimizerService:
                 Dict containing best operation schedule and its evaluation
             """
             if not self._is_model_ready():
-                raise ValueError(ERR_MODEL_NOT_TRAINED)
+                raise ValueError(self._get_model_not_ready_error())
 
             best_score = float('inf')
             best_result = None
@@ -415,8 +488,11 @@ class HVACOptimizerService:
             for num_switches in [1, 2]:
                 for switches in combinations(range(duration), num_switches):
                     for starting_operation in [0, 1]:
-                        operation = self._generate_operation(duration, switches, starting_operation)
+                        notebook_raw_operation = self._generate_notebook_operation(duration, switches, starting_operation)
+                        operation = notebook_raw_operation[:-1]
                         result = self._evaluate_candidate(operation, starting_temp, starting_time, outdoor_temps, setpoint, duration)
+                        result['notebook_raw_operation'] = notebook_raw_operation
+                        result['notebook_effective_operation'] = operation
                         if result['total_score'] < best_score:
                             best_score = result['total_score']
                             best_result = result
@@ -433,7 +509,7 @@ class HVACOptimizerService:
                 Dict containing recommended operation and savings analysis
             """
             if not self._is_model_ready():
-                raise ValueError(ERR_MODEL_NOT_TRAINED)
+                raise ValueError(self._get_model_not_ready_error())
             
             # Test all OFF operation
             operation_off = [0] * duration
@@ -448,20 +524,7 @@ class HVACOptimizerService:
             )
             
             # Check if OFF maintains comfort
-            if result_off['temperatures'][-1] <= setpoint + 1.0:  # Tolerance of 1°C
-                savings_percent = ((result_on['total_energy_consumption'] - result_off['total_energy_consumption']) / 
-                                    result_on['total_energy_consumption']) * 100
-                
-                return {
-                    'recommended_operation': operation_off,
-                    'recommendation_type': 'all_off',
-                    'energy_consumption': result_off['total_energy_consumption'],
-                    'temperatures': result_off['temperatures'],
-                    'savings_percentage': savings_percent,
-                    'avg_deviation_from_setpoint': result_off['avg_deviation_from_setpoint']
-                }
-            else:
-                # Use optimization
+            if result_off['temperatures'][-1] > setpoint:
                 optimized_result = self.biased_random_search(
                     starting_temp, starting_time, outdoor_temps, setpoint, duration
                 )
@@ -475,12 +538,93 @@ class HVACOptimizerService:
                     'energy_consumption': optimized_result['total_energy_consumption'],
                     'temperatures': optimized_result['temperatures'],
                     'savings_percentage': savings_percent,
-                    'avg_deviation_from_setpoint': optimized_result['avg_deviation_from_setpoint']
+                    'avg_deviation_from_setpoint': optimized_result['avg_deviation_from_setpoint'],
+                    'notebook_raw_operation': optimized_result.get('notebook_raw_operation'),
+                    'notebook_effective_operation': optimized_result.get('notebook_effective_operation', optimized_result['operation']),
+                    'baseline_all_off': {
+                        'operation': operation_off,
+                        'energy_consumption': result_off['total_energy_consumption'],
+                        'temperatures': result_off['temperatures'],
+                    },
+                    'baseline_all_on': {
+                        'operation': operation_on,
+                        'energy_consumption': result_on['total_energy_consumption'],
+                        'temperatures': result_on['temperatures'],
+                    },
+                    'optimized_candidate': {
+                        'operation': optimized_result['operation'],
+                        'energy_consumption': optimized_result['total_energy_consumption'],
+                        'temperatures': optimized_result['temperatures'],
+                    },
+                    'notebook_payload': self._build_notebook_payload(
+                        optimized_result.get('notebook_raw_operation', optimized_result['operation']),
+                        optimized_result['temperatures'],
+                        optimized_result['total_energy_consumption'],
+                        effective_operation=optimized_result.get('notebook_effective_operation', optimized_result['operation']),
+                    ),
                 }
+            else:
+                savings_percent = ((result_on['total_energy_consumption'] - result_off['total_energy_consumption']) / 
+                                    result_on['total_energy_consumption']) * 100
+                
+                return {
+                    'recommended_operation': operation_off,
+                    'recommendation_type': 'all_off',
+                    'energy_consumption': result_off['total_energy_consumption'],
+                    'temperatures': result_off['temperatures'],
+                    'savings_percentage': savings_percent,
+                    'avg_deviation_from_setpoint': result_off['avg_deviation_from_setpoint'],
+                    'baseline_all_off': {
+                        'operation': operation_off,
+                        'energy_consumption': result_off['total_energy_consumption'],
+                        'temperatures': result_off['temperatures'],
+                    },
+                    'baseline_all_on': {
+                        'operation': operation_on,
+                        'energy_consumption': result_on['total_energy_consumption'],
+                        'temperatures': result_on['temperatures'],
+                    },
+                    'notebook_payload': self._build_notebook_payload(
+                        operation_off,
+                        result_off['temperatures'],
+                        result_off['total_energy_consumption'],
+                    ),
+                }
+
+        def _to_notebook_optimization_response(self, result: Dict[str, Any]) -> Tuple[List[int], List[float], float]:
+            """
+            Convert the service-level optimization payload into the notebook's raw return signature:
+            (recommended_operation, temperatures, energy_consumption).
+            """
+            return (
+                (result.get("notebook_payload") or result)[RECOMMENDED_OPERATION],
+                (result.get("notebook_payload") or result)[TEMPERATURES],
+                (result.get("notebook_payload") or result)["energy_consumption"],
+            )
+
+        def _build_notebook_payload(
+            self,
+            operation: List[int],
+            temperatures: List[float],
+            energy_consumption: float,
+            effective_operation: Optional[List[int]] = None,
+        ) -> Dict[str, Any]:
+            """
+            Embed the notebook-equivalent optimization payload inside the richer service response.
+            """
+            payload = {
+                RECOMMENDED_OPERATION: operation,
+                TEMPERATURES: temperatures,
+                "energy_consumption": energy_consumption,
+            }
+            if effective_operation is not None:
+                payload["effective_operation"] = effective_operation
+            return payload
 
         def get_optimization_recommendation(self, starting_temp: float, starting_time: str,
                                           outdoor_temps: List[float], setpoint: float, 
-                                          is_peak_hours: bool = False, duration: int = 12) -> Dict[str, Any]:
+                                          is_peak_hours: bool = False, duration: int = 12,
+                                          response_format: str = "dict") -> Dict[str, Any] | Tuple[List[int], List[float], float]:
             """
             Get HVAC optimization recommendation using Random Forest model.
             
@@ -491,19 +635,28 @@ class HVACOptimizerService:
                 setpoint: AC setpoint temperature
                 is_peak_hours: True for peak hours optimization, False for normal conditions
                 duration: Number of 5-minute intervals (default 12 = 1 hour)
+                response_format: "dict" for the service response shape, or "notebook"
+                    for the notebook's raw tuple signature
+                    (recommended_operation, temperatures, energy_consumption)
                 
             Returns:
-                Dict containing recommendation, energy consumption, savings, and comfort metrics
+                Either:
+                - Dict containing recommendation, energy consumption, savings, and comfort metrics
+                - Tuple matching the notebook signature:
+                  (recommended_operation, temperatures, energy_consumption)
             """
             if not self._is_model_ready():
-                raise ValueError(ERR_MODEL_NOT_TRAINED)
+                raise ValueError(self._get_model_not_ready_error())
+
+            if response_format not in {"dict", "notebook"}:
+                raise ValueError("response_format must be either 'dict' or 'notebook'")
             
             if is_peak_hours:
                 # Peak hours: Use biased random search for optimal schedule
                 result = self.biased_random_search(
                     starting_temp, starting_time, outdoor_temps, setpoint, duration
                 )
-                return {
+                response = {
                     'recommendation_type': 'peak_hours_optimized',
                     'recommended_operation': result['operation'],
                     'energy_consumption': result['total_energy_consumption'],
@@ -511,13 +664,27 @@ class HVACOptimizerService:
                     'total_score': result['total_score'],
                     'comfort_penalty': result['comfort_penalty'],
                     'switch_penalty': result['switch_penalty'],
-                    'avg_deviation_from_setpoint': result['avg_deviation_from_setpoint']
+                    'avg_deviation_from_setpoint': result['avg_deviation_from_setpoint'],
+                    'notebook_raw_operation': result.get('notebook_raw_operation'),
+                    'notebook_effective_operation': result.get('notebook_effective_operation', result['operation']),
+                    'notebook_payload': self._build_notebook_payload(
+                        result.get('notebook_raw_operation', result['operation']),
+                        result['temperatures'],
+                        result['total_energy_consumption'],
+                        effective_operation=result.get('notebook_effective_operation', result['operation']),
+                    ),
                 }
+                if response_format == "notebook":
+                    return self._to_notebook_optimization_response(response)
+                return response
             else:
                 # Normal conditions: Smart optimization
-                return self.normal_conditions_optimizer(
+                response = self.normal_conditions_optimizer(
                     starting_temp, starting_time, outdoor_temps, setpoint, duration
                 )
+                if response_format == "notebook":
+                    return self._to_notebook_optimization_response(response)
+                return response
 
         def get_evaluation_metrics(self, y_true: List[float], y_pred: List[float]) -> Dict[str, float]:
             """
@@ -553,7 +720,9 @@ class HVACOptimizerService:
                 a_coefficient: The 'a' parameter from linear regression  
                 avg_cons_off: Average consumption when HVAC OFF
             """
-            import mlflow
+            if mlflow is None:
+                print("MLflow is not installed in this environment, cannot register notebook models.")
+                return
             import mlflow.sklearn
             import joblib
             
@@ -577,7 +746,7 @@ class HVACOptimizerService:
                     mlflow.sklearn.log_model(
                         rf_model,
                         "random_forest",
-                        registered_model_name="hvac_random_forest"
+                        registered_model_name=HVACOptimizerService.RF_MODEL_NAME
                     )
                     
                     # Log parameters as metrics and tags
@@ -588,25 +757,25 @@ class HVACOptimizerService:
                     
                     # Get model version and add tags
                     model_version = mlflow.tracking.MlflowClient().get_latest_versions(
-                        "hvac_random_forest", stages=["None"]
+                        HVACOptimizerService.RF_MODEL_NAME, stages=["None"]
                     )[0]
                     
                     mlflow.tracking.MlflowClient().set_model_version_tag(
-                        "hvac_random_forest", 
+                        HVACOptimizerService.RF_MODEL_NAME,
                         model_version.version,
                         "buildingID", 
                         str(building_id)
                     )
                     
                     mlflow.tracking.MlflowClient().set_model_version_tag(
-                        "hvac_random_forest", 
+                        HVACOptimizerService.RF_MODEL_NAME,
                         model_version.version,
                         "avg_consumption_off", 
                         str(avg_cons_off)
                     )
                     
                 print(f"✅ Successfully registered RF model for building {building_id}")
-                print(f"   - Model: hvac_random_forest v{model_version.version}")
+                print(f"   - Model: {HVACOptimizerService.RF_MODEL_NAME} v{model_version.version}")
                 print(f"   - Tags: buildingID={building_id}, avg_consumption_off={avg_cons_off}")
                 
             except Exception as e:

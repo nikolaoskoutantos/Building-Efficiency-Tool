@@ -28,5 +28,10 @@ api/authelia/config/users_database.yml
 # Authelia local database and notification logs
 api/authelia/config/db.sqlite3
 api/authelia/config/notification.txt
-
 api/services/test_optim.py
+api/services/test_optim_exports/
+
+
+# EMQX Config
+*.hocon
+

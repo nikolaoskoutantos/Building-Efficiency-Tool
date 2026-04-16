@@ -66,7 +66,6 @@
                   v-for="(sensor, index) in form.sensors" 
                   :key="index"
                   class="mb-3 sensor-card"
-                  style="border-left: 4px solid #20c997;"
                 >
                   <CCardBody>
                     <div class="d-flex justify-content-between align-items-start mb-3">
@@ -488,12 +487,38 @@ export default {
 
 <style scoped>
 .sensor-card {
+  border: 1px solid rgba(37, 99, 235, 0.08);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.06);
   transition: all 0.2s ease;
 }
 
 .sensor-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.09);
+}
+
+.sensor-card :deep(.card-body) {
+  background:
+    radial-gradient(circle at top right, rgba(32, 201, 151, 0.09), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
+.sensor-card h6 {
+  color: #132238;
+  font-weight: 700;
+}
+
+.sensor-card :deep(.form-label) {
+  color: #445066;
+  font-weight: 600;
+}
+
+.sensor-card :deep(.form-control),
+.sensor-card :deep(.form-select) {
+  border-radius: 12px;
+  border-color: rgba(19, 34, 56, 0.12);
 }
 
 .text-muted {

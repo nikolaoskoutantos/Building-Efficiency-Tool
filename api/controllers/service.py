@@ -3,9 +3,9 @@ from typing import Annotated
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.service import Service
-from controllers.auth import get_current_user
 from typing import List, Optional
 from pydantic import BaseModel, Field
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user
 
 # Error message constants
 SERVICE_NOT_FOUND_MSG = "Service not found"
@@ -42,8 +42,9 @@ def get_db():
 def create_service(
     service: ServiceCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[dict, Depends(get_current_user)]
+    current_user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
+    resolve_registered_user(current_user, db)
     db_service = Service(**service.dict())
     db.add(db_service)
     db.commit()
@@ -74,8 +75,9 @@ def update_service(
     service_id: int,
     service: ServiceCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[dict, Depends(get_current_user)]
+    current_user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
+    resolve_registered_user(current_user, db)
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)
@@ -92,8 +94,9 @@ def update_service(
 def delete_service(
     service_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[dict, Depends(get_current_user)]
+    current_user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
+    resolve_registered_user(current_user, db)
     db_service = db.query(Service).filter(Service.id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail=SERVICE_NOT_FOUND_MSG)

@@ -1,8 +1,11 @@
 import { defineComponent, h, onMounted, ref, resolveComponent } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
 
 import { CBadge, CSidebarNav, CNavItem, CNavGroup, CNavTitle } from '@coreui/vue'
 import nav from '@/_nav.js'
+import { useAuthStore } from '@/stores/auth'
+import { normalizeRole } from '@/utils/apiErrors'
 
 import simplebar from 'simplebar-vue'
 import 'simplebar-vue/dist/simplebar.min.css'
@@ -49,10 +52,21 @@ const AppSidebarNav = defineComponent({
   setup() {
     const route = useRoute()
     const firstRender = ref(true)
+    const authStore = useAuthStore()
+    const { userProfile } = storeToRefs(authStore)
 
     onMounted(() => {
       firstRender.value = false
     })
+
+    const canAccessItem = (item) => {
+      if (!Array.isArray(item.roles) || item.roles.length === 0) {
+        return true
+      }
+
+      const currentRole = normalizeRole(userProfile.value?.role)
+      return item.roles.includes(currentRole)
+    }
 
     const renderIcon = (icon) => {
       return icon
@@ -132,13 +146,18 @@ const AppSidebarNav = defineComponent({
     }
 
     const renderNavGroup = (item) => {
+      const visibleChildren = item.items.filter((child) => canAccessItem(child))
+      if (visibleChildren.length === 0) {
+        return null
+      }
+
       return h(
         CNavGroup,
         {
           as: 'div',
           compact: true,
           ...(firstRender.value && {
-            visible: item.items.some((child) => isActiveItem(route, child)),
+            visible: visibleChildren.some((child) => isActiveItem(route, child)),
           }),
         },
         {
@@ -149,12 +168,16 @@ const AppSidebarNav = defineComponent({
             }),
             item.name,
           ],
-          default: () => item.items.map((child) => renderItem(child)),
+          default: () => visibleChildren.map((child) => renderItem(child)),
         },
       )
     }
 
     const renderItem = (item) => {
+      if (!canAccessItem(item)) {
+        return null
+      }
+
       if (item.items) {
         return renderNavGroup(item)
       }

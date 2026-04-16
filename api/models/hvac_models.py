@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, Float, Boolean, DateTime, ForeignKey, Index, UniqueConstraint, String
 from sqlalchemy.sql import func
-from db import Base
+from db.connection import Base
 
 # String constants to avoid duplication (SonarQube S1192)
 TABLE_BUILDINGS = "buildings"

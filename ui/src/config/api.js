@@ -45,6 +45,21 @@ export const buildApiUrl = (endpoint) => {
   return `${config.baseURL}${endpoint}`
 }
 
+export const buildWebSocketUrl = (endpoint, query = {}) => {
+  const base = new URL(config.baseURL)
+  base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
+  base.pathname = endpoint
+  base.search = ''
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      base.searchParams.set(key, String(value))
+    }
+  })
+
+  return base.toString()
+}
+
 // Helper function to make API requests
 export const apiRequest = async (endpoint, options = {}) => {
   const url = buildApiUrl(endpoint)

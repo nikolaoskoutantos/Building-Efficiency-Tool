@@ -24,19 +24,18 @@ The repository is organized into clearly separated modules for backend (FastAPI)
 
 ## Services Overview
 
-| Folder                                          | Service/Module             | Description                                                                                  |
-| :---------------------------------------------- | :------------------------- | :------------------------------------------------------------------------------------------- |
-| [`api/`](./api/)                                 | Backend API                | FastAPI backend for REST endpoints, ML, DB access, and HVAC optimization logic.              |
-| [`ui/`](./ui/)                                   | Frontend UI                | Vue.js web application for user interaction and visualization.                               |
-| [`external_adapter/`](./external_adapter/)       | Chainlink Adapter          | Node.js service for Chainlink node integration, weather fetch, and IPFS CID return.          |
-| [`chainlink/`](./chainlink/)                     | Chainlink Node Config      | Chainlink node scripts, job specs, and smart contract interaction helpers.                   |
-| [`smart_contracts/`](./smart_contracts/)         | Smart Contracts            | Solidity contracts for on-chain logic, CID requests, and energy incentives.                  |
-| [`data_infrastructure/`](./data_infrastructure/) | Data Infrastructure        | Docker Compose, Vault, and IPFS setup for secure, decentralized data and secrets management. |
-| [`logger/`](./logger/)                           | Logging & Monitoring       | Caddy, Loki, Grafana, and Promtail for logging, metrics, and monitoring.                     |
-| [`oracle_node/`](./oracle_node/)                 | Oracle Node Infrastructure | Chainlink node deployment and configuration for oracle operations.                           |
-| [`notebooks/`](./notebooks/)                     | Research Notebooks         | Jupyter notebooks for validation, prototyping, and data exploration.                         |
-| [`drafts/`](./drafts/)                           | Drafts & Experiments       | Experimental code, drafts, and early-stage prototypes.                                       |
-| [`saved_models/`](./api/saved_models/)           | ML Model Artifacts         | Trained scikit-learn models and artifacts for HVAC optimization.                             |
+| Folder                                          | Service/Module             | Description                                                                                        |
+| :---------------------------------------------- | :------------------------- | :------------------------------------------------------------------------------------------------- |
+| [`api/`](./api/)                                 | Backend API                | FastAPI backend for REST endpoints, ML, DB access, and HVAC optimization logic.                    |
+| [`ui/`](./ui/)                                   | Frontend UI                | Vue.js web application for user interaction and visualization.                                     |
+| [`external_adapter/`](./external_adapter/)       | Chainlink Adapter          | Node.js service for Chainlink node integration, weather fetch, and IPFS CID return.                |
+| [`chainlink/`](./chainlink/)                     | Chainlink Node Config      | Chainlink node scripts, job specs, and smart contract interaction helpers.                         |
+| [`smart_contracts/`](./smart_contracts/)         | Smart Contracts            | Solidity contracts for on-chain logic, CID requests, and energy incentives.                        |
+| [`data_infrastructure/`](./data_infrastructure/) | Data Infrastructure        | Docker Compose, Vault, and IPFS setup for secure, decentralized data and secrets management.       |
+| [`logger/`](./logger/)                           | Logging & Monitoring       | Caddy, Loki, Grafana, and Promtail for logging, metrics, and monitoring.                           |
+| [`oracle_node/`](./oracle_node/)                 | Oracle Node Infrastructure | Chainlink node deployment and configuration for oracle operations.                                 |
+| [`notebooks/`](./notebooks/)                     | Research Notebooks         | Jupyter notebooks for validation, prototyping, and data exploration.                               |
+| [`Jenkins/`](./Jenkins/)                         | CI/CD Automation           | Jenkins pipelines, Docker setup, and automation scripts for continuous integration and deployment. |
 
 > **Note:** Each folder contains its own README and setup instructions where applicable.
 
@@ -44,22 +43,20 @@ The repository is organized into clearly separated modules for backend (FastAPI)
 
 Below are the current and planned DNS assignments for the demo deployment. Some services are not yet deployed and will be available soon.
 
-| Service                | DNS Name / URL                                                          | Status / Notes                                                         |
-| ---------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Backend API            | _Not yet deployed_                                                    | FastAPI backend (planned)                                              |
-| Frontend UI            | _Not yet deployed_                                                    | Vue.js web interface (planned)                                         |
-| Chainlink Adapter      | [adapter.nkoutantos.com/api-docs](https://adapter.nkoutantos.com/api-docs) | Swagger UI for external adapter (active)                               |
-| Oracle Node            | [oracle.nkoutantos.com](https://oracle.nkoutantos.com)                     | Oracle node management (active)                                        |
-| Logger/Grafana         | [grafana.nkoutantos.com](https://grafana.nkoutantos.com)                   | Grafana dashboards and metrics (active)                                |
-| Logger/Loki            | _Runs locally_                                                        | Loki log aggregation (local only)                                      |
-| Vault                  | [vault.nkoutantos.com](https://vault.nkoutantos.com)                       | HashiCorp Vault UI/API (active)                                        |
-| IPFS Gateway           | [ipfs.nkoutantos.com](https://ipfs.nkoutantos.com)                         | IPFS HTTP gateway (active)                                             |
-| Portainer              | [portainer.nkoutantos.com](https://portainer.nkoutantos.com)               | Docker container management UI (active)                                |
-| Portainer (Instance 2) | _Not yet deployed_                                                    | Secondary Docker management UI (planned)                               |
-| Traefik                | _Not yet deployed_                                                    | Reverse proxy and load balancer dashboard (planned)                    |
-| MLflow                 | _Not yet deployed_                                                    | ML experiment tracking and artifact store (planned)                    |
-| EMQX (MQTT Broker)     | _Not yet deployed_                                                    | MQTT broker dashboard and API (planned)                                |
-| Authelia               | Not yet deployed                                                        | Authentication Middleware for model registration via MLFlow (planned)) |
+| Service                | DNS Name / URL                                                          | Status / Notes                                                       |
+| ---------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Chainlink Adapter      | [adapter.nkoutantos.com/api-docs](https://adapter.nkoutantos.com/api-docs) | Swagger UI for external adapter (active)                             |
+| Oracle Node            | [oracle.nkoutantos.com](https://oracle.nkoutantos.com)                     | Oracle node management (active)                                      |
+| Logger/Grafana         | [grafana.nkoutantos.com](https://grafana.nkoutantos.com)                   | Grafana dashboards and metrics (active)                              |
+| Logger/Loki            | _Runs locally_                                                        | Loki log aggregation (local only)                                    |
+| Vault                  | [vault.nkoutantos.com](https://vault.nkoutantos.com)                       | HashiCorp Vault UI/API (active)                                      |
+| IPFS Gateway           | [ipfs.nkoutantos.com](https://ipfs.nkoutantos.com)                         | IPFS HTTP gateway (active)                                           |
+| Backend API            | [qoe-api.nkoutantos.com/docs](https://qoe-api.nkoutantos.com/docs)         | FastAPI backend (active)                                             |
+| Frontend UI            | [benet.nkoutantos.com](https://benet.nkoutantos.com/#/login)               | Vue.js web interface (active)                                        |
+| Portainer (Instance 2) | [qoe-portainer.nkoutantos.com](https://qoe-portainer.nkoutantos.com/)      | Secondary Docker management UI (active)                              |
+| MLflow                 | [mlflow.nkoutantos.com](https://mlflow.nkoutantos.com/)                    | ML experiment tracking and artifact store (active)                   |
+| EMQX (MQTT Broker)     | [mqtt.nkoutantos.com](https://mqtt.nkoutantos.com/)                        | MQTT broker dashboard and API (active)                               |
+| Authelia               | [auth.nkoutantos.com](https://auth.nkoutantos.com/authenticated)           | Authentication Middleware for model registration via MLFlow (active) |
 
 > **Tip:** Update your DNS provider to point these subdomains to your server's public IP. Configure your reverse proxy (Caddy, Nginx, etc.) to route each subdomain to the correct Docker service/container.
 

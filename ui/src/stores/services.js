@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { buildApiUrl } from '@/config/api.js'
 import { useAuthStore } from '@/stores/auth.js'
+import { parseApiErrorResponse } from '@/utils/apiErrors'
 
 export const useServicesStore = defineStore('services', () => {
   // State
@@ -31,7 +32,7 @@ export const useServicesStore = defineStore('services', () => {
     error.value = null
     
     try {
-      const response = await fetch(buildApiUrl('/services'), {
+      const response = await fetch(buildApiUrl('/services/'), {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -107,7 +108,7 @@ export const useServicesStore = defineStore('services', () => {
         if (response.status === 401) {
           throw new Error('Authentication required. Please log in.')
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(await parseApiErrorResponse(response, 'Failed to create service.'))
       }
 
       const newService = await response.json()
@@ -146,7 +147,7 @@ export const useServicesStore = defineStore('services', () => {
         if (response.status === 401) {
           throw new Error('Authentication required. Please log in.')
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(await parseApiErrorResponse(response, 'Failed to update service.'))
       }
 
       const updatedService = await response.json()
@@ -187,7 +188,7 @@ export const useServicesStore = defineStore('services', () => {
         if (response.status === 401) {
           throw new Error('Authentication required. Please log in.')
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(await parseApiErrorResponse(response, 'Failed to delete service.'))
       }
 
       // Remove from local state

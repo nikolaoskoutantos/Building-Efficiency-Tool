@@ -5,13 +5,14 @@ from models.sensor import Sensor
 from models.hvac_unit import HVACUnit
 import os
 from datetime import timezone
-from pyparsing import Optional
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.sensordata import SensorData
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
+from utils.policies import has_permission
 
 router = APIRouter(prefix="/sensordata", tags=["SensorData"])
 
@@ -92,28 +93,49 @@ def create_sensor_data(
     return db_data
 
 @router.get("/", response_model=List[SensorDataRead])
-def read_sensor_data(db: Annotated[Session, Depends(get_db)], skip: int = 0, limit: int = 100 ):
-    return db.query(SensorData).offset(skip).limit(limit).all()
+def read_sensor_data(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))],
+    skip: int = 0,
+    limit: int = 100
+):
+    user_id = resolve_registered_user_id(user, db)
+    sensor_data_rows = db.query(SensorData).offset(skip).limit(limit).all()
+    return [row for row in sensor_data_rows if has_permission(user_id, "sensor", row.sensor_id, db)]
 
 @router.get(
     "/{data_id}",
     response_model=SensorDataRead,
     responses={404: {"description": "SensorData not found"}}
 )
-def read_single_sensor_data(data_id: int, db: Annotated[Session, Depends(get_db)]):
+def read_single_sensor_data(
+    data_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     data = db.query(SensorData).filter(SensorData.id == data_id).first()
     if not data:
         raise HTTPException(status_code=404, detail="SensorData not found")
+    user_id = resolve_registered_user_id(user, db)
+    if not has_permission(user_id, "sensor", data.sensor_id, db):
+        raise HTTPException(status_code=403, detail="You are not authorized to view this sensor data")
     return data
 
 @router.delete(
     "/{data_id}",
     responses={200: {"description": "SensorData deleted"}, 404: {"description": "SensorData not found"}}
 )
-def delete_sensor_data(data_id: int, db: Annotated[Session, Depends(get_db)]):
+def delete_sensor_data(
+    data_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+):
     db_data = db.query(SensorData).filter(SensorData.id == data_id).first()
     if not db_data:
         raise HTTPException(status_code=404, detail="SensorData not found")
+    user_id = resolve_registered_user_id(user, db)
+    if not has_permission(user_id, "sensor", db_data.sensor_id, db):
+        raise HTTPException(status_code=403, detail="You are not authorized to delete this sensor data")
     db.delete(db_data)
     db.commit()
     return {"detail": "SensorData deleted"}

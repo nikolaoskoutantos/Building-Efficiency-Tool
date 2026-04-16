@@ -1,0 +1,10 @@
+blueocean
+configuration-as-code
+docker-workflow
+git
+github
+github-branch-source
+matrix-auth
+pipeline-stage-view
+workflow-aggregator
+credentials-binding

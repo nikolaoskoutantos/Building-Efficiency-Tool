@@ -1,6 +1,6 @@
 USER_NOT_FOUND_DESC = "User not found."
 from fastapi import APIRouter, HTTPException, Depends, status
-from utils.auth_dependencies import get_current_user_role
+from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
 from utils.policies import has_permission
 from typing import Annotated, Optional, List
 import uuid
@@ -108,10 +108,11 @@ class SensorBulkAddRequest(BaseModel):
 )
 def list_devices(
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
 ):
     """Get all registered HVAC devices with real sensor counts (auth required)"""
     try:
+        user_id = resolve_registered_user_id(user, db)
         sensor_count_subquery = (
             db.query(
                 Sensor.hvac_unit_id,
@@ -138,6 +139,8 @@ def list_devices(
             device_key = device.device_key
             if device_key is None or device_key.strip() == "":
                 continue  # Skip devices without valid keys
+            if not has_permission(user_id, "device", device.id, db):
+                continue
                 
             result.append(DeviceListResponse(
                 id=device.id,
@@ -165,13 +168,20 @@ def list_devices(
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
 )
-def get_device_sensors(device_id: int, db: Annotated[Session, Depends(get_db)]):
+def get_device_sensors(
+    device_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+):
     """Get all sensors for a specific device"""
     try:
+        user_id = resolve_registered_user_id(user, db)
         # Verify device exists
         device = db.query(HVACUnit).filter(HVACUnit.id == device_id).first()
         if not device:
             raise HTTPException(status_code=404, detail=DEVICE_NOT_FOUND)
+        if not has_permission(user_id, "device", device_id, db):
+            raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
         
         # Get sensors for this device
         sensors = db.query(Sensor).filter(Sensor.hvac_unit_id == device_id).all()
@@ -212,6 +222,7 @@ def add_sensors_to_device(
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
     """Add multiple sensors to an existing HVAC device"""
+    user_id = resolve_registered_user_id(user, db)
     # Verify device exists
     hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == req.device_id).first()
     if not hvac_unit:
@@ -220,11 +231,7 @@ def add_sensors_to_device(
     # Add sensors
     sensors_added = 0
     for s in req.sensors:
-        from models.hvac_models import User
-        user_obj = db.query(User).filter(User.wallet_address == user["user_id"]).first()
-        if not user_obj:
-            raise HTTPException(status_code=401, detail=USER_NOT_FOUND_DESC)
-        if not has_permission(user_obj.id, "building", hvac_unit.building_id, db):
+        if not has_permission(user_id, "building", hvac_unit.building_id, db):
             raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
         sensor = Sensor(
             building_id=hvac_unit.building_id,
@@ -263,6 +270,9 @@ def register_device(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]
 ):
+    user_id = resolve_registered_user_id(user, db)
+    if not has_permission(user_id, "building", req.building_id, db):
+        raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
     device_key = str(uuid.uuid4())
     device_secret = secrets.token_urlsafe(48)
     device_secret_hash = bcrypt.hashpw(device_secret.encode(), bcrypt.gensalt()).decode()
@@ -284,11 +294,7 @@ def register_device(
 
     if req.sensors:
         for s in req.sensors:
-            from models.hvac_models import User
-            user_obj = db.query(User).filter(User.wallet_address == user["user_id"]).first()
-            if not user_obj:
-                raise HTTPException(status_code=401, detail=USER_NOT_FOUND_DESC)
-            if not has_permission(user_obj.id, "building", req.building_id, db):
+            if not has_permission(user_id, "building", req.building_id, db):
                 raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
             sensor = Sensor(
                 building_id=req.building_id,
@@ -325,10 +331,15 @@ def update_device(
 ):
     """Update an existing HVAC device and its sensors"""
     try:
+        user_id = resolve_registered_user_id(user, db)
         # Find the existing device
         hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
         if not hvac_unit:
             raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND)
+        if not has_permission(user_id, "device", hvac_unit_id, db):
+            raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
+        if not has_permission(user_id, "building", req.building_id, db):
+            raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
 
         # Update HVAC unit fields
         hvac_unit.building_id = req.building_id
@@ -366,11 +377,7 @@ def update_device(
         # Add new sensors if provided
         if req.sensors:
             for s in req.sensors:
-                from models.hvac_models import User
-                user_obj = db.query(User).filter(User.wallet_address == user["user_id"]).first()
-                if not user_obj:
-                    raise HTTPException(status_code=401, detail=USER_NOT_FOUND_DESC)
-                if not has_permission(user_obj.id, "building", req.building_id, db):
+                if not has_permission(user_id, "building", req.building_id, db):
                     raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
                 sensor = Sensor(
                     building_id=req.building_id,
@@ -411,10 +418,14 @@ def upsert_device_credentials(
     db: Annotated[Session, Depends(get_db)],
     hvac_unit_id: int,
     req: Optional[DeviceCredentialUpsertRequest] = None,
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None,
 ):
     hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
     if not hvac_unit:
         raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND_DESC)
+    user_id = resolve_registered_user_id(user, db)
+    if not has_permission(user_id, "device", hvac_unit.id, db):
+        raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
     device_secret = secrets.token_urlsafe(48)
     device_secret_hash = bcrypt.hashpw(device_secret.encode(), bcrypt.gensalt()).decode()
     now = datetime.now(timezone.utc).isoformat()

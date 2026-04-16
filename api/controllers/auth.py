@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, status, Request, Response, Depends
 from typing import Annotated
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -94,7 +95,8 @@ if not JWT_SECRET:
     raise RuntimeError("SESSION_SECRET_KEY must be set in your .env file or environment variables for JWT authentication.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60
-AUTH_TYPE = os.getenv("AUTH_TYPE", "jwt")  # 'cookie' or 'jwt'
+# QoE uses JWT auth end-to-end in the app and websocket flows.
+AUTH_TYPE = "jwt"
 
 class LoginRequest(BaseModel):
     # Traditional login fields (optional)
@@ -132,6 +134,12 @@ class RegisterResponse(BaseModel):
     building_created: Optional[bool] = False
 
 
+def normalize_wallet_address(wallet_address: Optional[str]) -> Optional[str]:
+    if not wallet_address:
+        return wallet_address
+    return wallet_address.strip().lower()
+
+
 def get_db():
     db_session = SessionLocal()
     try:
@@ -165,7 +173,7 @@ def login(
             return handle_web3_login(data, request, db_session)
         # Check if this is traditional authentication
         elif data.username and data.password:
-            return handle_traditional_login(data, request)
+            return handle_traditional_login(data, request, db_session)
         else:
             raise HTTPException(
                 status_code=400, 
@@ -178,7 +186,7 @@ def login(
         logger.error("Unexpected error during login", extra={"error": str(e).replace('\n', ' ').replace('\r', ' ')})
         raise HTTPException(status_code=500, detail="Internal server error during login")
 
-def handle_traditional_login(data: LoginRequest, request: Request):
+def handle_traditional_login(data: LoginRequest, request: Request, db_session: Session):
     """Handle traditional username/password login."""
     # Call external auth system
     headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
@@ -203,18 +211,29 @@ def handle_traditional_login(data: LoginRequest, request: Request):
 
     # Create session/token
     logger.info(f"Traditional login successful for user {user_info.get('username')}")
+    wallet = normalize_wallet_address(user_info.get("wallet"))
+    user = (
+        db_session.query(User)
+        .filter(func.lower(User.wallet_address) == wallet)
+        .first()
+        if wallet
+        else None
+    )
     return create_auth_response(
         user=user_info.get("username"),
         role=user_info.get("role", "user"),
-        wallet=user_info.get("wallet"),
+        wallet=wallet,
         auth_method="traditional",
-        request=request
+        request=request,
+        user_id=user.id if user else None,
     )
 
 def handle_web3_login(data: LoginRequest, request: Request, db_session: Session):
     """Handle Web3 signature-based login."""
     try:
         # Validate message format
+        normalized_address = normalize_wallet_address(data.address)
+
         if not validate_message_format(data.message, data.address, data.nonce):
             logger.warning(
                 "Invalid message format for wallet",
@@ -237,11 +256,15 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
             )
 
         # Look up the user's role from the DB using db_session
-        user = db_session.query(User).filter(User.wallet_address == data.address).first()
+        user = (
+            db_session.query(User)
+            .filter(func.lower(User.wallet_address) == normalized_address)
+            .first()
+        )
         if not user:
             logger.warning(
                 "Wallet not registered",
-                extra={"wallet": str(data.address).replace('\n', ' ').replace('\r', ' ')}
+                extra={"wallet": str(normalized_address).replace('\n', ' ').replace('\r', ' ')}
             )
             raise HTTPException(status_code=401, detail="Wallet not registered")
         # Find all active roles for this user (across all buildings)
@@ -272,16 +295,18 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
             "Web3 login successful for wallet with role",
             extra={
                 "wallet": str(data.address).replace('\n', ' ').replace('\r', ' '),
+                "normalized_wallet": str(normalized_address).replace('\n', ' ').replace('\r', ' '),
                 "role": str(role).replace('\n', ' ').replace('\r', ' ')
             }
         )
         # Create session/token for Web3 user with correct role
         return create_auth_response(
-            user=data.address,
+            user=normalized_address,
             role=role,
-            wallet=data.address,
+            wallet=normalized_address,
             auth_method="web3",
-            request=request
+            request=request,
+            user_id=user.id,
         )
 
     except HTTPException as e:
@@ -306,10 +331,16 @@ def handle_web3_login(data: LoginRequest, request: Request, db_session: Session)
             detail="Internal server error during Web3 authentication"
         )
 
-def create_auth_response(user: str, role: str, wallet: str, auth_method: str, request: Request):
+def create_auth_response(
+    user: str,
+    role: str,
+    wallet: str,
+    auth_method: str,
+    request: Request,
+    user_id: Optional[int] = None,
+):
     """Create unified authentication response with session/JWT."""
     print(f"🔧 AUTH_TYPE: {AUTH_TYPE}")
-    print(f"🔧 JWT_SECRET: {JWT_SECRET[:10]}...")
     print(f"🔧 Creating auth response for user: {user}")
     
     # Set session cookie (server-side session) if AUTH_TYPE is cookie
@@ -317,6 +348,7 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
         print("🍪 Setting session cookie...")
         request.session.update({
             "user": user,
+            "user_id": user_id,
             "role": str(role),
             "wallet": wallet,
             "auth_method": auth_method,
@@ -330,18 +362,20 @@ def create_auth_response(user: str, role: str, wallet: str, auth_method: str, re
         # Support multiple roles if present (role can be a list or string)
         payload = {
             "user": user,
+            "user_id": user_id,
             "role": str(role) if isinstance(role, Role) else role,
             "wallet": wallet,
             "auth_method": auth_method,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES)
         }
         token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-        print(f"✅ JWT token created: {token[:20]}...")
+        print("✅ JWT token created")
 
     response_data = {
         "success": True,
         "message": "Login successful",
         "user": user,
+        "user_id": user_id,
         "role": role,
         "wallet": wallet,
         "auth_method": auth_method
@@ -430,6 +464,7 @@ def get_current_user(request: Request):
     # Try session first if AUTH_TYPE is cookie
     if AUTH_TYPE == "cookie":
         user = request.session.get("user")
+        user_id = request.session.get("user_id")
         role = request.session.get("role", str(Role.OCCUPANT))
         wallet = request.session.get("wallet")
         auth_method = request.session.get("auth_method", "traditional")
@@ -437,6 +472,7 @@ def get_current_user(request: Request):
         if user:
             return {
                 "user": user,
+                "user_id": user_id,
                 "role": role,
                 "wallet": wallet,
                 "auth_method": auth_method,
@@ -452,6 +488,7 @@ def get_current_user(request: Request):
                 payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
                 return {
                     "user": payload.get("user"),
+                    "user_id": payload.get("user_id"),
                     "role": payload.get("role", str(Role.OCCUPANT)),
                     "wallet": payload.get("wallet"),
                     "auth_method": payload.get("auth_method", "traditional"),
@@ -466,6 +503,7 @@ def get_current_user(request: Request):
 # Helper functions to reduce cognitive complexity
 def _validate_registration_request(data: RegisterRequest) -> None:
     """Validate registration request data."""
+    data.wallet_address = normalize_wallet_address(data.wallet_address)
     # Validate wallet address format
     if not data.wallet_address.startswith("0x") or len(data.wallet_address) != 42:
         raise HTTPException(
@@ -534,8 +572,13 @@ def _resolve_or_create_building(data: RegisterRequest, db_session: Session) -> t
 
 def _resolve_or_create_user(wallet_address: str, db_session: Session) -> User:
     """Resolve existing user or create new one."""
-    user = db_session.query(User).filter(User.wallet_address == wallet_address).first()
+    wallet_address = normalize_wallet_address(wallet_address)
+    user = db_session.query(User).filter(func.lower(User.wallet_address) == wallet_address).first()
     if user:
+        if user.wallet_address != wallet_address:
+            user.wallet_address = wallet_address
+            db_session.commit()
+            db_session.refresh(user)
         logger.info(f"User with wallet {wallet_address} already exists (ID: {user.id})")
         return user
     

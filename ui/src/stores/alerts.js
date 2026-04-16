@@ -26,5 +26,14 @@ export const useAlertsStore = defineStore('alerts', () => {
     alerts.value.push(alert)
   }
 
-  return { alerts, setAlerts, addAlert }
+  function removeAlert(index) {
+    if (index < 0 || index >= alerts.value.length) return
+    alerts.value.splice(index, 1)
+  }
+
+  function clearAlerts() {
+    alerts.value = []
+  }
+
+  return { alerts, setAlerts, addAlert, removeAlert, clearAlerts }
 })

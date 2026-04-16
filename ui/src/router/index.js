@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import DefaultLayout from '@/layouts/DefaultLayout'
 import { useAuthStore } from '@/stores/auth'
 import { buildApiUrl } from '@/config/api.js'
+import { normalizeRole } from '@/utils/apiErrors'
 
 // 1. Define your routes
 const routes = [
@@ -20,7 +21,7 @@ const routes = [
       {
         path: '/device-registration',
         name: 'DeviceRegistration',
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: true, allowedRoles: ['BUILDING_MANAGER', 'ADMIN'] },
         component: () => import('@/views/forms/DeviceRegistration.vue'),
       },
       {
@@ -30,6 +31,12 @@ const routes = [
         component: () => import('@/views/pages/Settings.vue'),
       },
     ],
+  },
+  {
+    path: '/access-denied',
+    name: 'AccessDenied',
+    meta: { requiresAuth: true },
+    component: () => import('@/views/pages/AccessDenied.vue'),
   },
   {
     path: '/login',
@@ -59,11 +66,14 @@ const logAuthState = (to, from, auth) => {
   })
 }
 
-const handleVerificationInProgress = async (auth, next) => {
+const handleVerificationInProgress = async (to, auth, next) => {
   console.log('⏳ Auth verification in progress, waiting...')
   await new Promise(resolve => setTimeout(resolve, 200))
   
   if (auth.isAuthenticated) {
+    if (handleRoleRestriction(to, auth, next)) {
+      return true
+    }
     console.log('✅ Auth completed during wait, allowing access')
     next()
     return true
@@ -71,11 +81,37 @@ const handleVerificationInProgress = async (auth, next) => {
   return false
 }
 
-const handleJwtValidation = async (auth, next) => {
+const handleRoleRestriction = (to, auth, next) => {
+  const allowedRoles = to.meta.allowedRoles
+  const currentRole = normalizeRole(auth.userProfile?.role)
+
+  if (Array.isArray(allowedRoles) && allowedRoles.length > 0 && !allowedRoles.includes(currentRole)) {
+    console.warn('⛔ Route blocked due to role restrictions', {
+      path: to.path,
+      role: currentRole,
+      allowedRoles,
+    })
+    next({
+      name: 'AccessDenied',
+      query: {
+        from: to.path,
+        required: allowedRoles.join(', '),
+      },
+    })
+    return true
+  }
+
+  return false
+}
+
+const handleJwtValidation = async (to, auth, next) => {
   console.log('🔄 Validating JWT token...')
   try {
     const isValid = await auth.validateJwtToken()
     if (isValid) {
+      if (handleRoleRestriction(to, auth, next)) {
+        return true
+      }
       console.log('✅ JWT token valid, allowing access')
       next()
     } else {
@@ -90,7 +126,7 @@ const handleJwtValidation = async (auth, next) => {
   return true
 }
 
-const handleSessionValidation = async (auth, next) => {
+const handleSessionValidation = async (to, auth, next) => {
   console.log('📝 No JWT token, trying session validation...')
   try {
     const response = await fetch(buildApiUrl('/auth/me'), {
@@ -102,6 +138,9 @@ const handleSessionValidation = async (auth, next) => {
       auth.isAuthenticated = true
       auth.userProfile = userData
       auth.walletAddress = userData.wallet || userData.user
+      if (handleRoleRestriction(to, auth, next)) {
+        return
+      }
       console.log('✅ Session valid, allowing access')
       next()
     } else {
@@ -119,12 +158,16 @@ const handleProtectedRoute = async (to, from, auth, next) => {
   
   // If currently verifying (during login), wait briefly and check again
   if (auth.isVerifying) {
-    const handled = await handleVerificationInProgress(auth, next)
+    const handled = await handleVerificationInProgress(to, auth, next)
     if (handled) return
   }
   
   // Check if user is already authenticated
   if (auth.isAuthenticated) {
+    if (handleRoleRestriction(to, auth, next)) {
+      return
+    }
+
     console.log('✅ User authenticated, allowing access')
     next()
     return
@@ -134,9 +177,9 @@ const handleProtectedRoute = async (to, from, auth, next) => {
   const jwtToken = auth.getJwtToken()
   
   if (jwtToken) {
-    await handleJwtValidation(auth, next)
+    await handleJwtValidation(to, auth, next)
   } else {
-    await handleSessionValidation(auth, next)
+    await handleSessionValidation(to, auth, next)
   }
 }
 

@@ -40,20 +40,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
-import { useAppKit, useAppKitAccount, useDisconnect } from '@reown/appkit/vue'
+import { useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect } from '@reown/appkit/vue'
 import { ethers } from 'ethers'
 
-const { open, close } = useAppKit()
+type Eip1193Provider = {
+  request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>
+  on?: (...args: unknown[]) => void
+  removeListener?: (...args: unknown[]) => void
+}
+
+const { open } = useAppKit()
 const { disconnect } = useDisconnect()
 const accountData = useAppKitAccount()
+const { walletProvider } = useAppKitProvider<Eip1193Provider>('eip155')
 const router = useRouter()
 const auth = useAuthStore()
 
 // Loading state for message signing
 const isSigningMessage = ref(false)
+const lastProcessedAddress = ref<string | null>(null)
+const activeEthereumProvider = computed<Eip1193Provider | null>(() => {
+  if (walletProvider?.value) {
+    return walletProvider.value
+  }
+
+  const globalEthereum = (globalThis as typeof globalThis & { ethereum?: Eip1193Provider }).ethereum
+  return globalEthereum ?? null
+})
 
 async function connectWallet() {
   try {
@@ -66,7 +82,8 @@ async function connectWallet() {
       auth.userProfile = null
       auth.clearJwtToken()
     }
-    
+
+    lastProcessedAddress.value = null
     await open()
   } catch (err) {
     console.error('❌ Wallet connection failed:', err)
@@ -96,15 +113,15 @@ Issued at: ${timestamp}`
 async function signMessage(address: string) {
   try {
     isSigningMessage.value = true
-    
-    // Get provider from window (MetaMask, etc.)
-    if (!window.ethereum) {
-      throw new Error('No Ethereum provider found')
+
+    const providerSource = activeEthereumProvider.value
+    if (!providerSource) {
+      throw new Error('No wallet provider found from AppKit or browser wallet')
     }
-    
-    const provider = new ethers.providers.Web3Provider(window.ethereum)
+
+    const provider = new ethers.providers.Web3Provider(providerSource)
     const signer = provider.getSigner()
-    
+
     // Generate nonce and message
     const nonce = generateNonce()
     const message = createSignMessage(address, nonce)
@@ -144,9 +161,17 @@ async function logout() {
 }
 
 watch(
-  () => accountData.value.address,
-  async (address) => {
-    if (address) {
+  () => [accountData.value.address, activeEthereumProvider.value] as const,
+  async ([address, provider]) => {
+    if (address && provider) {
+      if (isSigningMessage.value || auth.isVerifying) {
+        return
+      }
+
+      if (lastProcessedAddress.value === address && auth.isAuthenticated) {
+        return
+      }
+
       try {
         // First set basic wallet data
         auth.setWalletData({
@@ -157,41 +182,43 @@ watch(
           ensName: null,
           avatar: null,
         })
-        
+
         // Then sign the authentication message
         const authData = await signMessage(address)
-        
+
         console.log('🔐 About to call setSignedMessage...')
         auth.debugAuthState()
-        
+
         // Store the signed message in auth store and get result
         const result = await auth.setSignedMessage(authData)
-        
+
         console.log('🎯 Login result:', result)
         console.log('🔍 Auth state after setSignedMessage:')
         auth.debugAuthState()
-        
+
         // Redirect to dashboard if authentication was successful
         if (result.success && result.shouldRedirect) {
           console.log('✅ Redirecting to dashboard...')
-          
+
           // Verify auth state before redirect
           if (!auth.isAuthenticated) {
             console.warn('⚠️ Auth state not set properly, waiting longer...')
             await new Promise(resolve => setTimeout(resolve, 200))
           }
-          
+
+          lastProcessedAddress.value = address
           // Use replace instead of push to avoid back navigation issues
           await router.replace('/efficiencytool')
         } else if (result.success) {
           console.log('✅ Login successful but no redirect flag')
-          
+
           // Verify auth state before redirect
           if (!auth.isAuthenticated) {
             console.warn('⚠️ Auth state not set properly, waiting longer...')
             await new Promise(resolve => setTimeout(resolve, 200))
           }
-          
+
+          lastProcessedAddress.value = address
           // Still redirect if login was successful
           await router.replace('/efficiencytool')
         } else if (!result.success) {
@@ -199,6 +226,7 @@ watch(
         }
       } catch (error) {
         console.error('❌ Authentication failed:', error)
+        lastProcessedAddress.value = null
         // If signing fails, disconnect wallet
         await disconnect()
       }

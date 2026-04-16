@@ -134,11 +134,11 @@ onMounted(async () => {
   }
 })
 
-const CONTRACT_ADDRESS = '0x9946587cd79d59737B99D6a0b5A499584Fa3863d'
 const ABI = [
   "function sendRequest(string, uint8, bytes, string[], bytes[], uint64, uint32) external",
   "function s_lastResponse() public view returns (bytes memory)"
 ]
+const CONTRACT_ADDRESS = '0x9946587cd79d59737B99D6a0b5A499584Fa3863d'
 
 // JS source used in the Chainlink request
 const jsSource = `

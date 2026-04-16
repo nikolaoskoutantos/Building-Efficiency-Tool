@@ -14,8 +14,8 @@ computed: {
     <!-- Existing Devices Section -->
     <CRow class="mb-4">
       <CCol>
-        <CCard>
-          <CCardHeader>
+        <CCard class="installed-devices-panel">
+          <CCardHeader class="installed-devices-panel__header">
             <div class="d-flex justify-content-between align-items-center">
               <div>
                 <strong>Installed Devices</strong>
@@ -387,8 +387,7 @@ computed: {
                 <CCard 
                   v-for="(sensor, index) in form.sensors" 
                   :key="index"
-                  class="mb-3"
-                  style="border-left: 4px solid #6f42c1;"
+                  class="mb-3 sensor-card"
                 >
                   <CCardBody>
                     <div class="d-flex justify-content-between align-items-start mb-3">
@@ -767,7 +766,7 @@ computed: {
                   :md="6"
                   class="mb-3"
                 >
-                  <CCard class="h-100" style="border-left: 4px solid #6f42c1;">
+                  <CCard class="h-100 sensor-card">
                     <CCardBody>
                       <div class="d-flex justify-content-between align-items-start mb-2">
                         <div>
@@ -907,7 +906,7 @@ export default {
           'Content-Type': 'application/json'
         }
         console.log('[loadBuildings] Headers:', headers)
-        const response = await fetch(`${this.apiBaseUrl}/buildings`, {
+        const response = await fetch(`${this.apiBaseUrl}/buildings/`, {
           headers,
           credentials: 'include'
         })
@@ -1061,7 +1060,7 @@ export default {
       this.form.room = device.room || ''
       try {
         const jwtToken = this.getJwtToken()
-        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors/`, {
+        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors`, {
           headers: {
             'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
             'Content-Type': 'application/json'
@@ -1199,7 +1198,7 @@ export default {
       this.deviceDetails.show = true
       try {
         const jwtToken = this.getJwtToken()
-        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors/`, {
+        const response = await fetch(`${this.apiBaseUrl}/devices/${device.id}/sensors`, {
           headers: {
             'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
             'Content-Type': 'application/json'
@@ -1379,8 +1378,17 @@ export default {
 
     async parseApiError(response) {
       const errorResponse = await response.text()
+
+      if (response.status === 401) {
+        return 'Authentication required. Please log in again.'
+      }
+
+      if (response.status === 403) {
+        return 'Your current role does not have permission to manage devices or sensors.'
+      }
+
       let errorMessage = 'Unknown error occurred'
-      
+
       try {
         const errorData = JSON.parse(errorResponse)
         if (errorData.detail) {
@@ -1559,21 +1567,91 @@ export default {
 </script>
 
 <style scoped>
+.installed-devices-panel {
+  border: 1px solid rgba(37, 99, 235, 0.08);
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+}
+
+.installed-devices-panel__header {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.installed-devices-panel :deep(.card-body) {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
 .sensor-card {
+  border: 1px solid rgba(37, 99, 235, 0.08);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.06);
   transition: all 0.2s ease;
 }
 
 .sensor-card:hover {
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  transform: translateY(-2px);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.09);
+}
+
+.sensor-card :deep(.card-body) {
+  background:
+    radial-gradient(circle at top right, rgba(111, 66, 193, 0.08), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
+.sensor-card h6 {
+  color: #132238;
+  font-weight: 700;
+}
+
+.sensor-card :deep(.form-label) {
+  color: #445066;
+  font-weight: 600;
+}
+
+.sensor-card :deep(.form-control),
+.sensor-card :deep(.form-select) {
+  border-radius: 12px;
+  border-color: rgba(19, 34, 56, 0.12);
 }
 
 .device-info-card {
+  border: 1px solid rgba(37, 99, 235, 0.1);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.06);
   transition: all 0.2s ease;
-  border-left: 4px solid #0066cc;
 }
 
 .device-info-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.09);
+}
+
+.device-info-card :deep(.card-body) {
+  background:
+    radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
+.device-info-card h6 {
+  color: #132238;
+  font-weight: 700;
+}
+
+.device-info-card code {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.08);
+  border-radius: 8px;
+  padding: 0.1rem 0.35rem;
+}
+
+.device-info-card :deep(.btn) {
+  border-radius: 12px;
 }
 </style>

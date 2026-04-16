@@ -1,0 +1,19 @@
+services:
+  jenkins:
+    networks:
+      - jenkins
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.jenkins.rule=Host(`${JENKINS_HOST}`)
+      - traefik.http.routers.jenkins.entrypoints=websecure
+      - traefik.http.routers.jenkins.tls.certresolver=le
+      - traefik.http.routers.jenkins.middlewares=authelia@docker
+      - traefik.http.services.jenkins.loadbalancer.server.port=8080
+
+networks:
+  proxy:
+    external: true
+    name: proxy
+  jenkins:

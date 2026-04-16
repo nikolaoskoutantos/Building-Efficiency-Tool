@@ -21,3 +21,4 @@ mlflow
 paho-mqtt
 aiohttp
 asyncpg
+alembic
