@@ -15,9 +15,9 @@
 
         <!-- Show signing status -->
         <div v-if="isSigningMessage" class="text-center mb-3">
-          <div class="spinner-border spinner-border-sm me-2" role="status">
+          <output class="spinner-border spinner-border-sm me-2">
             <span class="visually-hidden">Loading...</span>
-          </div>
+          </output>
           <span class="text-primary">Please sign the message in your wallet...</span>
         </div>
 
@@ -160,76 +160,92 @@ async function logout() {
   router.push('/')
 }
 
+function canStartWalletAuthentication(address?: string | null, provider?: Eip1193Provider | null) {
+  if (!address || !provider) {
+    return false
+  }
+
+  if (isSigningMessage.value || auth.isVerifying) {
+    return false
+  }
+
+  if (lastProcessedAddress.value === address && auth.isAuthenticated) {
+    return false
+  }
+
+  return true
+}
+
+function setBasicWalletData(address: string) {
+  auth.setWalletData({
+    address,
+    chainId: null, // Will be set by the provider
+    walletType: 'web3',
+    balance: null,
+    ensName: null,
+    avatar: null,
+  })
+}
+
+async function ensureAuthenticatedBeforeRedirect() {
+  if (!auth.isAuthenticated) {
+    console.warn('⚠️ Auth state not set properly, waiting longer...')
+    await new Promise(resolve => setTimeout(resolve, 200))
+  }
+}
+
+async function finalizeSuccessfulLogin(address: string, shouldRedirect: boolean) {
+  if (shouldRedirect) {
+    console.log('✅ Redirecting to dashboard...')
+  } else {
+    console.log('✅ Login successful but no redirect flag')
+  }
+
+  await ensureAuthenticatedBeforeRedirect()
+  lastProcessedAddress.value = address
+  await router.replace('/efficiencytool')
+}
+
+async function authenticateWalletAddress(address: string) {
+  setBasicWalletData(address)
+
+  const authData = await signMessage(address)
+
+  console.log('🔐 About to call setSignedMessage...')
+  auth.debugAuthState()
+
+  const result = await auth.setSignedMessage(authData)
+
+  console.log('🎯 Login result:', result)
+  console.log('🔍 Auth state after setSignedMessage:')
+  auth.debugAuthState()
+
+  if (!result.success) {
+    throw new Error(result.error || 'Authentication failed')
+  }
+
+  await finalizeSuccessfulLogin(address, result.shouldRedirect)
+}
+
 watch(
   () => [accountData.value.address, activeEthereumProvider.value] as const,
   async ([address, provider]) => {
-    if (address && provider) {
-      if (isSigningMessage.value || auth.isVerifying) {
-        return
-      }
+    if (!canStartWalletAuthentication(address, provider)) {
+      return
+    }
 
-      if (lastProcessedAddress.value === address && auth.isAuthenticated) {
-        return
-      }
+    const walletAddress = address
+    if (!walletAddress) {
+      return
+    }
 
-      try {
-        // First set basic wallet data
-        auth.setWalletData({
-          address,
-          chainId: null, // Will be set by the provider
-          walletType: 'web3',
-          balance: null,
-          ensName: null,
-          avatar: null,
-        })
-
-        // Then sign the authentication message
-        const authData = await signMessage(address)
-
-        console.log('🔐 About to call setSignedMessage...')
-        auth.debugAuthState()
-
-        // Store the signed message in auth store and get result
-        const result = await auth.setSignedMessage(authData)
-
-        console.log('🎯 Login result:', result)
-        console.log('🔍 Auth state after setSignedMessage:')
-        auth.debugAuthState()
-
-        // Redirect to dashboard if authentication was successful
-        if (result.success && result.shouldRedirect) {
-          console.log('✅ Redirecting to dashboard...')
-
-          // Verify auth state before redirect
-          if (!auth.isAuthenticated) {
-            console.warn('⚠️ Auth state not set properly, waiting longer...')
-            await new Promise(resolve => setTimeout(resolve, 200))
-          }
-
-          lastProcessedAddress.value = address
-          // Use replace instead of push to avoid back navigation issues
-          await router.replace('/efficiencytool')
-        } else if (result.success) {
-          console.log('✅ Login successful but no redirect flag')
-
-          // Verify auth state before redirect
-          if (!auth.isAuthenticated) {
-            console.warn('⚠️ Auth state not set properly, waiting longer...')
-            await new Promise(resolve => setTimeout(resolve, 200))
-          }
-
-          lastProcessedAddress.value = address
-          // Still redirect if login was successful
-          await router.replace('/efficiencytool')
-        } else if (!result.success) {
-          throw new Error(result.error || 'Authentication failed')
-        }
-      } catch (error) {
-        console.error('❌ Authentication failed:', error)
-        lastProcessedAddress.value = null
-        // If signing fails, disconnect wallet
-        await disconnect()
-      }
+    try {
+      await authenticateWalletAddress(walletAddress)
+    } catch (error) {
+      console.error('❌ Authentication failed:', error)
+      lastProcessedAddress.value = null
+      // If signing fails, disconnect wallet
+      await disconnect()
     }
   },
   { immediate: true }

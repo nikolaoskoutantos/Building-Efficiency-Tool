@@ -1,3 +1,75 @@
+CREATE OR REPLACE FUNCTION public.five_minute_interval()
+RETURNS interval
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT interval '5 minutes';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.utc_timezone_name()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT 'UTC';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.unix_epoch_utc()
+RETURNS timestamptz
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT timestamptz '1970-01-01 00:00:00+00';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.default_dashboard_past_range()
+RETURNS interval
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT interval '5 hours';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.default_dashboard_future_range()
+RETURNS interval
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT interval '3 hours';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.temperature_sensor_type()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT 'temperature';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.presence_sensor_type()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT 'presence';
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.energy_sensor_type()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT 'energy';
+$$;
+
+
 CREATE OR REPLACE FUNCTION public.get_building_sensor_weather(
     in_building_id INTEGER,
     in_start_time  TIMESTAMP,
@@ -28,7 +100,7 @@ LANGUAGE sql
 AS $$
 WITH
 interval_cte AS (
-  SELECT interval '5 minutes' AS step
+  SELECT public.five_minute_interval() AS step
 ),
 time_series AS (
   SELECT generate_series(in_start_time, in_end_time, (SELECT step FROM interval_cte))::timestamp AS ts
@@ -83,8 +155,8 @@ SELECT
     hi.id AS hvac_interval_id,
     hi.is_on AS hvac_is_on,
     hi.setpoint AS hvac_setpoint,
-    (hi.start_ts AT TIME ZONE 'UTC')::timestamp AS hvac_interval_start,
-    (hi.end_ts   AT TIME ZONE 'UTC')::timestamp AS hvac_interval_end
+    (hi.start_ts AT TIME ZONE public.utc_timezone_name())::timestamp AS hvac_interval_start,
+    (hi.end_ts   AT TIME ZONE public.utc_timezone_name())::timestamp AS hvac_interval_end
 FROM time_series ts
 JOIN bld b ON TRUE
 CROSS JOIN sensors_for_bld s
@@ -102,8 +174,8 @@ LEFT JOIN public.weather_data w
 LEFT JOIN public.hvac_schedule_intervals hi
        ON hi.building_id = b.id
       AND hi.hvac_unit_id = s.hvac_unit_id
-      AND ts.ts >= (hi.start_ts AT TIME ZONE 'UTC')::timestamp
-      AND ts.ts <  (hi.end_ts   AT TIME ZONE 'UTC')::timestamp
+      AND ts.ts >= (hi.start_ts AT TIME ZONE public.utc_timezone_name())::timestamp
+      AND ts.ts <  (hi.end_ts   AT TIME ZONE public.utc_timezone_name())::timestamp
 ORDER BY ts.ts, s.id;
 $$;
 
@@ -115,12 +187,12 @@ RETURNS void
 LANGUAGE sql
 AS $$
 WITH interval_cte AS (
-  SELECT interval '5 minutes' AS step
+  SELECT public.five_minute_interval() AS step
 )
 INSERT INTO public.sensor_data (sensor_id, "timestamp", value, measurement_type, unit)
 SELECT
   r.sensor_id,
-  date_bin((SELECT step FROM interval_cte), r."timestamp", timestamptz '1970-01-01 00:00:00+00') AS bucket_start,
+  date_bin((SELECT step FROM interval_cte), r."timestamp", public.unix_epoch_utc()) AS bucket_start,
   avg(r.value)::double precision AS value,
   r.measurement_type,
   max(r.unit) AS unit
@@ -148,8 +220,8 @@ $$;
 CREATE OR REPLACE FUNCTION public.dashboard_time_grid(
     in_building_id INTEGER,
     in_ref_now TIMESTAMPTZ DEFAULT now(),
-    in_past_range INTERVAL DEFAULT interval '5 hours',
-    in_future_range INTERVAL DEFAULT interval '3 hours'
+    in_past_range INTERVAL DEFAULT public.default_dashboard_past_range(),
+    in_future_range INTERVAL DEFAULT public.default_dashboard_future_range()
 )
 RETURNS TABLE(
     ts timestamptz,
@@ -177,10 +249,13 @@ RETURNS TABLE(
     notes text,
     is_optimized boolean
 ) AS $$
-WITH params AS (
+WITH bucket_step_cte AS (
+    SELECT public.five_minute_interval() AS step
+),
+params AS (
     SELECT
         in_building_id AS building_id,
-        date_bin(interval '5 minutes', in_ref_now, timestamptz '1970-01-01 00:00:00+00') AS ref_now,
+        date_bin((SELECT step FROM bucket_step_cte), in_ref_now, public.unix_epoch_utc()) AS ref_now,
         in_past_range AS past_range,
         in_future_range AS future_range
 ),
@@ -209,9 +284,9 @@ grid AS (
     FROM (
         SELECT
             date_bin(
-                interval '5 minutes',
+                (SELECT step FROM bucket_step_cte),
                 sd.timestamp,
-                timestamptz '1970-01-01 00:00:00+00'
+                public.unix_epoch_utc()
             ) AS ts
         FROM public.sensor_data sd
         JOIN public.sensors s ON s.id = sd.sensor_id
@@ -222,9 +297,9 @@ grid AS (
         UNION
 
         SELECT generate_series(
-            p.ref_now + interval '5 minutes',
+            p.ref_now + (SELECT step FROM bucket_step_cte),
             p.ref_now + p.future_range,
-            interval '5 minutes'
+            (SELECT step FROM bucket_step_cte)
         ) AS ts
         FROM params p
     ) timeline
@@ -335,9 +410,9 @@ energy_values AS (
 )
 SELECT
     g.ts,
-    MAX(CASE WHEN sv.type = 'temperature' THEN sv.value END) AS temperature,
-    MAX(CASE WHEN sv.type = 'presence' THEN sv.value END) AS presence,
-    MAX(CASE WHEN sv.type = 'energy' THEN sv.value END) AS energy,
+    MAX(CASE WHEN sv.type = public.temperature_sensor_type() THEN sv.value END) AS temperature,
+    MAX(CASE WHEN sv.type = public.presence_sensor_type() THEN sv.value END) AS presence,
+    MAX(CASE WHEN sv.type = public.energy_sensor_type() THEN sv.value END) AS energy,
     wv.outdoor_temperature,
     wv.outdoor_humidity,
     wv.outdoor_pressure,
@@ -393,8 +468,8 @@ $$ LANGUAGE sql;
 CREATE OR REPLACE FUNCTION public.efficiency_tool_timeseries(
     in_building_id INTEGER,
     in_ref_now TIMESTAMPTZ DEFAULT now(),
-    in_past_range INTERVAL DEFAULT interval '5 hours',
-    in_future_range INTERVAL DEFAULT interval '3 hours'
+    in_past_range INTERVAL DEFAULT public.default_dashboard_past_range(),
+    in_future_range INTERVAL DEFAULT public.default_dashboard_future_range()
 )
 RETURNS TABLE(
     ts timestamptz,
@@ -425,10 +500,13 @@ RETURNS TABLE(
 )
 LANGUAGE sql
 AS $$
-WITH params AS (
+WITH bucket_step_cte AS (
+    SELECT public.five_minute_interval() AS step
+),
+params AS (
     SELECT
         in_building_id AS building_id,
-        date_bin(interval '5 minutes', in_ref_now, timestamptz '1970-01-01 00:00:00+00') AS ref_now,
+        date_bin((SELECT step FROM bucket_step_cte), in_ref_now, public.unix_epoch_utc()) AS ref_now,
         in_past_range AS past_range,
         in_future_range AS future_range
 ),
@@ -454,9 +532,9 @@ history_rows AS (
     SELECT
         gsw.sensor_timestamp::timestamptz AS ts,
         'history'::text AS data_kind,
-        MAX(CASE WHEN lower(gsw.sensor_type) = 'temperature' THEN gsw.sensor_value END) AS temperature,
-        MAX(CASE WHEN lower(gsw.sensor_type) = 'presence' THEN gsw.sensor_value END) AS presence,
-        MAX(CASE WHEN lower(gsw.sensor_type) = 'energy' THEN gsw.sensor_value END) AS energy,
+        MAX(CASE WHEN lower(gsw.sensor_type) = public.temperature_sensor_type() THEN gsw.sensor_value END) AS temperature,
+        MAX(CASE WHEN lower(gsw.sensor_type) = public.presence_sensor_type() THEN gsw.sensor_value END) AS presence,
+        MAX(CASE WHEN lower(gsw.sensor_type) = public.energy_sensor_type() THEN gsw.sensor_value END) AS energy,
         MAX(gsw.temperature) AS outdoor_temperature,
         MAX(gsw.humidity) AS outdoor_humidity,
         MAX(gsw.pressure) AS outdoor_pressure,
@@ -478,9 +556,9 @@ history_rows AS (
 ),
 forecast_grid AS (
     SELECT generate_series(
-        p.ref_now + interval '5 minutes',
+        p.ref_now + (SELECT step FROM bucket_step_cte),
         p.ref_now + p.future_range,
-        interval '5 minutes'
+        (SELECT step FROM bucket_step_cte)
     ) AS ts
     FROM params p
 ),

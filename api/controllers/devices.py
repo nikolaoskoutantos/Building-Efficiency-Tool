@@ -165,6 +165,7 @@ def list_devices(
     responses={
         404: {"description": DEVICE_NOT_FOUND_DESC},
         401: {"description": UNAUTHORIZED_DESC},
+        403: {"description": UNAUTHORIZED_DESC},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
 )
@@ -261,6 +262,7 @@ def add_sensors_to_device(
     responses={
         400: {"description": "Invalid input or device already exists for this location."},
         401: {"description": UNAUTHORIZED_DESC},
+        403: {"description": UNAUTHORIZED_DESC},
         404: {"description": "Building not found."},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
@@ -319,6 +321,7 @@ def register_device(
     responses={
         400: {"description": "Invalid input or validation error."},
         401: {"description": UNAUTHORIZED_DESC},
+        403: {"description": UNAUTHORIZED_DESC},
         404: {"description": DEVICE_NOT_FOUND_DESC},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
@@ -411,6 +414,7 @@ def update_device(
     responses={
         404: {"description": HVAC_UNIT_NOT_FOUND_DESC},
         401: {"description": UNAUTHORIZED_DESC},
+        403: {"description": UNAUTHORIZED_DESC},
         500: {"description": INTERNAL_SERVER_ERROR_DESC}
     },
 )

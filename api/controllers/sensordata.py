@@ -106,7 +106,10 @@ def read_sensor_data(
 @router.get(
     "/{data_id}",
     response_model=SensorDataRead,
-    responses={404: {"description": "SensorData not found"}}
+    responses={
+        403: {"description": "You are not authorized to view this sensor data"},
+        404: {"description": "SensorData not found"},
+    }
 )
 def read_single_sensor_data(
     data_id: int,
@@ -123,7 +126,11 @@ def read_single_sensor_data(
 
 @router.delete(
     "/{data_id}",
-    responses={200: {"description": "SensorData deleted"}, 404: {"description": "SensorData not found"}}
+    responses={
+        200: {"description": "SensorData deleted"},
+        403: {"description": "You are not authorized to delete this sensor data"},
+        404: {"description": "SensorData not found"},
+    }
 )
 def delete_sensor_data(
     data_id: int,

@@ -20,6 +20,10 @@ ws_router = APIRouter(
     tags=["Predictors"],
 )
 
+OPTIMIZATION_STATUS_EVENT = "optimization.status"
+OPTIMIZATION_COMPLETED_EVENT = "optimization.completed"
+OPTIMIZATION_FAILED_EVENT = "optimization.failed"
+
 # Pydantic schemas
 class PredictorBase(BaseModel):
     name: str
@@ -260,7 +264,7 @@ async def optimize_hvac_schedule_ws(
 
         await websocket.send_json(
             {
-                "type": "optimization.status",
+                "type": OPTIMIZATION_STATUS_EVENT,
                 "status": "accepted",
                 "building_id": request.building_id,
                 "optimization_type": request.optimization_type,
@@ -270,7 +274,7 @@ async def optimize_hvac_schedule_ws(
 
         await websocket.send_json(
             {
-                "type": "optimization.status",
+                "type": OPTIMIZATION_STATUS_EVENT,
                 "status": "initializing_optimizer",
             }
         )
@@ -280,7 +284,7 @@ async def optimize_hvac_schedule_ws(
 
         await websocket.send_json(
             {
-                "type": "optimization.status",
+                "type": OPTIMIZATION_STATUS_EVENT,
                 "status": "optimizer_ready",
                 "timing": {
                     "optimizer_init_seconds": optimizer_init_seconds,
@@ -290,7 +294,7 @@ async def optimize_hvac_schedule_ws(
 
         await websocket.send_json(
             {
-                "type": "optimization.status",
+                "type": OPTIMIZATION_STATUS_EVENT,
                 "status": "running_optimization",
             }
         )
@@ -311,7 +315,7 @@ async def optimize_hvac_schedule_ws(
 
         await websocket.send_json(
             {
-                "type": "optimization.completed",
+                "type": OPTIMIZATION_COMPLETED_EVENT,
                 "status": "completed",
                 "building_id": request.building_id,
                 "optimization_type": request.optimization_type,
@@ -328,7 +332,7 @@ async def optimize_hvac_schedule_ws(
     except Exception as exc:
         await websocket.send_json(
             {
-                "type": "optimization.failed",
+                "type": OPTIMIZATION_FAILED_EVENT,
                 "status": "failed",
                 "detail": str(exc),
             }

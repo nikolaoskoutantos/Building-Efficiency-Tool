@@ -110,7 +110,7 @@ const handleJwtValidation = async (to, auth, next) => {
     const isValid = await auth.validateJwtToken()
     if (isValid) {
       if (handleRoleRestriction(to, auth, next)) {
-        return true
+        return
       }
       console.log('✅ JWT token valid, allowing access')
       next()
@@ -123,7 +123,6 @@ const handleJwtValidation = async (to, auth, next) => {
     auth.clearJwtToken()
     next('/login')
   }
-  return true
 }
 
 const handleSessionValidation = async (to, auth, next) => {

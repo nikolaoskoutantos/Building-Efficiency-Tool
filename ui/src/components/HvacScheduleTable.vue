@@ -196,10 +196,10 @@ function addRow() {
     now.setMilliseconds(0);
     now.setSeconds(0);
     let min = now.getMinutes();
-    if (min % 5 !== 0) {
-      now.setMinutes(min + (5 - (min % 5)));
-    } else {
+    if (min % 5 === 0) {
       now.setMinutes(min);
+    } else {
+      now.setMinutes(min + (5 - (min % 5)));
     }
     start = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
     end = addMinutesToTimeLabel(start, 60)
@@ -220,28 +220,48 @@ function removeRow(idx) {
   syncScheduleToStore(true)
 }
 
-function validateSchedule() {
-  error.value = ''
-  for (let i = 0; i < schedule.value.length; i++) {
-    const current = schedule.value[i]
-    if (!isValidTimeLabel(current?.start) || !isValidTimeLabel(current?.end)) {
-      error.value = 'Please enter valid start and end times.'
-      return false
-    }
-    if (current.start === current.end) {
-      error.value = 'Start time and end time cannot be the same.'
-      return false
-    }
-    for (let j = 0; j < schedule.value.length; j++) {
-      if (i === j) continue
-      const row = schedule.value[j]
-      if (!row.enabled || !current.enabled) continue
-      if (rowsOverlap(current, row)) {
-        error.value = 'Time ranges cannot overlap.'
-        return false
+function getRowValidationError(row) {
+  if (!isValidTimeLabel(row?.start) || !isValidTimeLabel(row?.end)) {
+    return 'Please enter valid start and end times.'
+  }
+
+  if (row.start === row.end) {
+    return 'Start time and end time cannot be the same.'
+  }
+
+  return ''
+}
+
+function hasEnabledOverlap(rows) {
+  const enabledRows = rows.filter(row => row.enabled)
+
+  for (let i = 0; i < enabledRows.length; i++) {
+    for (let j = i + 1; j < enabledRows.length; j++) {
+      if (rowsOverlap(enabledRows[i], enabledRows[j])) {
+        return true
       }
     }
   }
+
+  return false
+}
+
+function validateSchedule() {
+  error.value = ''
+
+  for (const row of schedule.value) {
+    const rowError = getRowValidationError(row)
+    if (rowError) {
+      error.value = rowError
+      return false
+    }
+  }
+
+  if (hasEnabledOverlap(schedule.value)) {
+    error.value = 'Time ranges cannot overlap.'
+    return false
+  }
+
   return true
 }
 
@@ -341,6 +361,16 @@ function handleEnabledChange(idx, value) {
 :global([data-coreui-theme='dark']) .hvac-schedule-table {
   border-color: rgba(148, 163, 184, 0.18);
   box-shadow: 0 20px 42px rgba(2, 6, 23, 0.32);
+  --el-input-bg-color: rgba(15, 23, 42, 0.78) !important;
+  --el-input-border-color: rgba(148, 163, 184, 0.18) !important;
+  --el-input-hover-border-color: rgba(96, 165, 250, 0.5) !important;
+  --el-input-focus-border-color: rgba(96, 165, 250, 0.7) !important;
+  --el-input-text-color: #e2e8f0 !important;
+  --el-text-color-regular: #e2e8f0 !important;
+  --el-fill-color-blank: rgba(15, 23, 42, 0.78) !important;
+  --el-bg-color-overlay: rgba(15, 23, 42, 0.98) !important;
+  --el-border-color-light: rgba(148, 163, 184, 0.16) !important;
+  --el-mask-color: transparent !important;
 }
 
 :global([data-coreui-theme='dark']) .hvac-schedule-table .card-body {
@@ -372,16 +402,4 @@ function handleEnabledChange(idx, value) {
   background: rgba(15, 23, 42, 0.44);
 }
 
-:global([data-coreui-theme='dark']) .hvac-schedule-table {
-  --el-input-bg-color: rgba(15, 23, 42, 0.78) !important;
-  --el-input-border-color: rgba(148, 163, 184, 0.18) !important;
-  --el-input-hover-border-color: rgba(96, 165, 250, 0.5) !important;
-  --el-input-focus-border-color: rgba(96, 165, 250, 0.7) !important;
-  --el-input-text-color: #e2e8f0 !important;
-  --el-text-color-regular: #e2e8f0 !important;
-  --el-fill-color-blank: rgba(15, 23, 42, 0.78) !important;
-  --el-bg-color-overlay: rgba(15, 23, 42, 0.98) !important;
-  --el-border-color-light: rgba(148, 163, 184, 0.16) !important;
-  --el-mask-color: transparent !important;
-}
 </style>

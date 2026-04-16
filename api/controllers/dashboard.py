@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -15,11 +16,21 @@ import os
 
 from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
 from utils.building_sensor_weather_snapshot import fetch_building_sensor_weather_rows
+
+DASHBOARD_ALLOWED_ROLES = ["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]
+DASHBOARD_SCHEDULE_EDIT_ROLES = ["BUILDING_MANAGER", "ADMIN"]
+BUILDING_RESOURCE_TYPE = "building"
+FORBIDDEN_BUILDING_DETAIL = "You are not authorized for this building."
+FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION = "Forbidden: User not authorized for this building."
+FORBIDDEN_ANY_BUILDINGS_DETAIL = "You are not authorized for any buildings."
+
 router = APIRouter(
     prefix="/dashboard",
     tags=["Dashboard"],
-    dependencies=[Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+    dependencies=[Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))]
 )
+
+ZERO_FLOAT_ABS_TOLERANCE = 1e-9
 
 # Pydantic response models
 class DashboardDevice(BaseModel):
@@ -196,26 +207,55 @@ def _normalize_materialized_schedule_rows(
     for row, start_local, end_local in sorted(materialized_rows, key=lambda item: (item[1], item[2])):
         if end_local <= start_local:
             continue
-
-        if normalized:
-            prev_row, prev_start, prev_end = normalized[-1]
-
-            if start_local < prev_end:
-                if end_local <= prev_end:
-                    continue
-                start_local = prev_end
-
-            if (
-                prev_end == start_local
-                and bool(prev_row.enabled) == bool(row.enabled)
-                and (prev_row.setpoint if prev_row.enabled else None) == (row.setpoint if row.enabled else None)
-            ):
-                normalized[-1] = (prev_row, prev_start, end_local)
-                continue
-
-        normalized.append((row, start_local, end_local))
+        _append_normalized_schedule_row(normalized, row, start_local, end_local)
 
     return normalized
+
+
+def _append_normalized_schedule_row(
+    normalized: List[tuple[DashboardScheduleRow, datetime, datetime]],
+    row: DashboardScheduleRow,
+    start_local: datetime,
+    end_local: datetime,
+) -> None:
+    if not normalized:
+        normalized.append((row, start_local, end_local))
+        return
+
+    prev_row, prev_start, prev_end = normalized[-1]
+    trimmed_range = _trim_schedule_range_against_previous(prev_end, start_local, end_local)
+    if trimmed_range is None:
+        return
+
+    start_local, end_local = trimmed_range
+    if prev_end == start_local and _schedule_rows_have_matching_state(prev_row, row):
+        normalized[-1] = (prev_row, prev_start, end_local)
+        return
+
+    normalized.append((row, start_local, end_local))
+
+
+def _trim_schedule_range_against_previous(
+    previous_end: datetime,
+    start_local: datetime,
+    end_local: datetime,
+) -> Optional[tuple[datetime, datetime]]:
+    if start_local >= previous_end:
+        return start_local, end_local
+    if end_local <= previous_end:
+        return None
+    return previous_end, end_local
+
+
+def _schedule_rows_have_matching_state(
+    previous_row: DashboardScheduleRow,
+    current_row: DashboardScheduleRow,
+) -> bool:
+    return (
+        bool(previous_row.enabled) == bool(current_row.enabled)
+        and (previous_row.setpoint if previous_row.enabled else None)
+        == (current_row.setpoint if current_row.enabled else None)
+    )
 
 
 def _get_building_hvac_unit(db: Session, building_id: int) -> HVACUnit:
@@ -405,49 +445,56 @@ def _aggregate_sensor_weather_rows(raw_rows: List[dict[str, Any]]) -> List[dict[
         if ts is None:
             continue
 
-        bucket = by_ts.setdefault(
-            ts,
-            {
-                "ts": ts,
-                "temperature": None,
-                "presence": None,
-                "energy": None,
-                "outdoor_temperature": row.get("temperature"),
-                "outdoor_humidity": row.get("humidity"),
-                "outdoor_pressure": row.get("pressure"),
-                "wind_speed": row.get("wind_speed"),
-                "wind_direction": row.get("wind_direction"),
-                "precipitation": row.get("precipitation"),
-                "weather_description": row.get("weather_description"),
-                "weather_source_timestamp": row.get("weather_timestamp"),
-                "hvac_is_on": row.get("hvac_is_on"),
-                "hvac_setpoint": row.get("hvac_setpoint"),
-                "active_hvac_intervals": 1 if row.get("hvac_is_on") else 0,
-                "optimization_time": None,
-                "input_hash": None,
-                "output_hash": None,
-                "energy_saving_kwh": None,
-                "baseline_consumption_kwh": None,
-                "optimized_consumption_kwh": None,
-                "environmental_points": None,
-                "notes": None,
-                "is_optimized": None,
-            },
-        )
-
-        sensor_type = (row.get("sensor_type") or "").lower()
-        sensor_value = row.get("sensor_value")
-        if sensor_type == "temperature":
-            bucket["temperature"] = sensor_value
-        elif sensor_type == "presence":
-            bucket["presence"] = sensor_value
-        elif sensor_type == "energy":
-            bucket["energy"] = sensor_value
-
-        if row.get("hvac_is_on"):
-            bucket["active_hvac_intervals"] = max(bucket["active_hvac_intervals"] or 0, 1)
+        bucket = by_ts.setdefault(ts, _build_sensor_weather_bucket(ts, row))
+        _apply_sensor_value_to_bucket(bucket, row)
+        _update_bucket_hvac_activity(bucket, row)
 
     return [by_ts[ts] for ts in sorted(by_ts.keys())]
+
+
+def _build_sensor_weather_bucket(ts: datetime, row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ts": ts,
+        "temperature": None,
+        "presence": None,
+        "energy": None,
+        "outdoor_temperature": row.get("temperature"),
+        "outdoor_humidity": row.get("humidity"),
+        "outdoor_pressure": row.get("pressure"),
+        "wind_speed": row.get("wind_speed"),
+        "wind_direction": row.get("wind_direction"),
+        "precipitation": row.get("precipitation"),
+        "weather_description": row.get("weather_description"),
+        "weather_source_timestamp": row.get("weather_timestamp"),
+        "hvac_is_on": row.get("hvac_is_on"),
+        "hvac_setpoint": row.get("hvac_setpoint"),
+        "active_hvac_intervals": 1 if row.get("hvac_is_on") else 0,
+        "optimization_time": None,
+        "input_hash": None,
+        "output_hash": None,
+        "energy_saving_kwh": None,
+        "baseline_consumption_kwh": None,
+        "optimized_consumption_kwh": None,
+        "environmental_points": None,
+        "notes": None,
+        "is_optimized": None,
+    }
+
+
+def _apply_sensor_value_to_bucket(bucket: dict[str, Any], row: dict[str, Any]) -> None:
+    sensor_field_by_type = {
+        "temperature": "temperature",
+        "presence": "presence",
+        "energy": "energy",
+    }
+    sensor_field = sensor_field_by_type.get((row.get("sensor_type") or "").lower())
+    if sensor_field is not None:
+        bucket[sensor_field] = row.get("sensor_value")
+
+
+def _update_bucket_hvac_activity(bucket: dict[str, Any], row: dict[str, Any]) -> None:
+    if row.get("hvac_is_on"):
+        bucket["active_hvac_intervals"] = max(bucket["active_hvac_intervals"] or 0, 1)
 
 
 def _fetch_future_weather_rows(
@@ -557,41 +604,87 @@ def _attach_future_context(
 
     for row in future_rows:
         ts = row["ts"]
-        active = [item for item in hvac_rows if item["start_ts"] <= ts < item["end_ts"]]
-
-        while optimization_index < len(optimization_rows) and optimization_rows[optimization_index]["optimization_time"] <= ts:
-            latest_optimization = optimization_rows[optimization_index]
-            optimization_index += 1
-
-        enriched_row = {
-            "ts": ts,
-            "temperature": None,
-            "presence": None,
-            "energy": None,
-            "outdoor_temperature": row.get("outdoor_temperature"),
-            "outdoor_humidity": row.get("outdoor_humidity"),
-            "outdoor_pressure": row.get("outdoor_pressure"),
-            "wind_speed": row.get("wind_speed"),
-            "wind_direction": row.get("wind_direction"),
-            "precipitation": row.get("precipitation"),
-            "weather_description": row.get("weather_description"),
-            "weather_source_timestamp": row.get("weather_source_timestamp"),
-            "hvac_is_on": any(item.get("is_on") for item in active),
-            "hvac_setpoint": next((item.get("setpoint") for item in active if item.get("is_on")), None),
-            "active_hvac_intervals": sum(1 for item in active if item.get("is_on")),
-            "optimization_time": None if latest_optimization is None else latest_optimization.get("optimization_time"),
-            "input_hash": None if latest_optimization is None else latest_optimization.get("input_hash"),
-            "output_hash": None if latest_optimization is None else latest_optimization.get("output_hash"),
-            "energy_saving_kwh": None if latest_optimization is None else latest_optimization.get("energy_saving_kwh"),
-            "baseline_consumption_kwh": None if latest_optimization is None else latest_optimization.get("baseline_consumption_kwh"),
-            "optimized_consumption_kwh": None if latest_optimization is None else latest_optimization.get("optimized_consumption_kwh"),
-            "environmental_points": None if latest_optimization is None else latest_optimization.get("environmental_points"),
-            "notes": None if latest_optimization is None else latest_optimization.get("notes"),
-            "is_optimized": None if latest_optimization is None else latest_optimization.get("is_optimized"),
-        }
-        enriched.append(enriched_row)
+        active = _get_active_hvac_rows(hvac_rows, ts)
+        latest_optimization, optimization_index = _advance_latest_optimization(
+            optimization_rows,
+            optimization_index,
+            ts,
+            latest_optimization,
+        )
+        enriched.append(_build_enriched_future_row(row, active, latest_optimization))
 
     return enriched
+
+
+def _get_active_hvac_rows(hvac_rows: List[dict[str, Any]], ts: datetime) -> List[dict[str, Any]]:
+    return [item for item in hvac_rows if item["start_ts"] <= ts < item["end_ts"]]
+
+
+def _advance_latest_optimization(
+    optimization_rows: List[dict[str, Any]],
+    optimization_index: int,
+    ts: datetime,
+    latest_optimization: Optional[dict[str, Any]],
+) -> tuple[Optional[dict[str, Any]], int]:
+    while (
+        optimization_index < len(optimization_rows)
+        and optimization_rows[optimization_index]["optimization_time"] <= ts
+    ):
+        latest_optimization = optimization_rows[optimization_index]
+        optimization_index += 1
+    return latest_optimization, optimization_index
+
+
+def _build_enriched_future_row(
+    row: dict[str, Any],
+    active_hvac_rows: List[dict[str, Any]],
+    latest_optimization: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "ts": row["ts"],
+        "temperature": None,
+        "presence": None,
+        "energy": None,
+        "outdoor_temperature": row.get("outdoor_temperature"),
+        "outdoor_humidity": row.get("outdoor_humidity"),
+        "outdoor_pressure": row.get("outdoor_pressure"),
+        "wind_speed": row.get("wind_speed"),
+        "wind_direction": row.get("wind_direction"),
+        "precipitation": row.get("precipitation"),
+        "weather_description": row.get("weather_description"),
+        "weather_source_timestamp": row.get("weather_source_timestamp"),
+        "hvac_is_on": any(item.get("is_on") for item in active_hvac_rows),
+        "hvac_setpoint": next((item.get("setpoint") for item in active_hvac_rows if item.get("is_on")), None),
+        "active_hvac_intervals": sum(1 for item in active_hvac_rows if item.get("is_on")),
+        **_optimization_snapshot(latest_optimization),
+    }
+
+
+def _optimization_snapshot(latest_optimization: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if latest_optimization is None:
+        return {
+            "optimization_time": None,
+            "input_hash": None,
+            "output_hash": None,
+            "energy_saving_kwh": None,
+            "baseline_consumption_kwh": None,
+            "optimized_consumption_kwh": None,
+            "environmental_points": None,
+            "notes": None,
+            "is_optimized": None,
+        }
+
+    return {
+        "optimization_time": latest_optimization.get("optimization_time"),
+        "input_hash": latest_optimization.get("input_hash"),
+        "output_hash": latest_optimization.get("output_hash"),
+        "energy_saving_kwh": latest_optimization.get("energy_saving_kwh"),
+        "baseline_consumption_kwh": latest_optimization.get("baseline_consumption_kwh"),
+        "optimized_consumption_kwh": latest_optimization.get("optimized_consumption_kwh"),
+        "environmental_points": latest_optimization.get("environmental_points"),
+        "notes": latest_optimization.get("notes"),
+        "is_optimized": latest_optimization.get("is_optimized"),
+    }
 
 
 def _fill_outdoor_temperatures(rows: List[dict[str, Any]], ref_now: datetime, duration: int = 12) -> List[float]:
@@ -638,7 +731,10 @@ def _build_optimization_context(building_id: int, rows: List[dict[str, Any]], re
         fallback_setpoint = None if previous_with_setpoint is None else previous_with_setpoint.get("hvac_setpoint")
     if fallback_setpoint is None:
         missing_fields.append("hvac_setpoint")
-    if not outdoor_temperatures or all(value == 0.0 for value in outdoor_temperatures):
+    if not outdoor_temperatures or all(
+        math.isclose(value, 0.0, abs_tol=ZERO_FLOAT_ABS_TOLERANCE)
+        for value in outdoor_temperatures
+    ):
         missing_fields.append("outdoor_temperatures")
 
     return DashboardOptimizationContext(
@@ -693,7 +789,7 @@ def _fetch_efficiency_tool_rows(
 )
 async def get_dashboard_data(
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))]
 ):
     """
     Unified dashboard endpoint that loads all necessary data in a single optimized query.
@@ -707,7 +803,7 @@ async def get_dashboard_data(
         user_buildings = db.query(UserBuilding).filter_by(user_id=user_id, status="active").all()
         allowed_building_ids = [ub.building_id for ub in user_buildings]
         if not allowed_building_ids:
-            raise HTTPException(status_code=403, detail="You are not authorized for any buildings.")
+            raise HTTPException(status_code=403, detail=FORBIDDEN_ANY_BUILDINGS_DETAIL)
         buildings = db.query(Building).filter(Building.id.in_(allowed_building_ids)).all()
         buildings_data = [
             DashboardBuilding(
@@ -816,12 +912,13 @@ async def get_dashboard_data(
 
 @router.get("/stats",
     responses={
+        403: {"description": "Forbidden: User not authorized for any buildings."},
         500: {"description": "Internal server error."}
     }
 )
 async def get_dashboard_stats(
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))]
 ):
     """
     Quick endpoint for just dashboard statistics (for real-time updates)
@@ -832,7 +929,7 @@ async def get_dashboard_stats(
         user_buildings = db.query(UserBuilding).filter_by(user_id=user_id, status="active").all()
         allowed_building_ids = [ub.building_id for ub in user_buildings]
         if not allowed_building_ids:
-            raise HTTPException(status_code=403, detail="You are not authorized for any buildings.")
+            raise HTTPException(status_code=403, detail=FORBIDDEN_ANY_BUILDINGS_DETAIL)
 
         total_devices = db.query(HVACUnit).filter(
             HVACUnit.device_key.isnot(None),
@@ -855,6 +952,8 @@ async def get_dashboard_stats(
             "last_updated": "now"
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load dashboard stats: {str(e)}")
 
@@ -863,14 +962,14 @@ async def get_dashboard_stats(
     "/time-grid/{building_id}",
     response_model=DashboardTimeGridResponse,
     responses={
-        403: {"description": "Forbidden: User not authorized for this building."},
+        403: {"description": FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION},
         500: {"description": "Internal server error."},
     },
 )
 async def get_dashboard_time_grid(
     building_id: int,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))],
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))],
     ref_now: Annotated[Optional[datetime], Query(description="Reference time in ISO format")] = None,
     past_hours: Annotated[float, Query(description="Hours of past data to include", ge=0.5, le=24)] = 5,
     future_hours: Annotated[float, Query(description="Hours of future data to include", ge=0.5, le=24)] = 3,
@@ -882,8 +981,8 @@ async def get_dashboard_time_grid(
         user_id = resolve_registered_user_id(user, db)
         from utils.policies import has_permission
 
-        if not has_permission(user_id, "building", building_id, db):
-            raise HTTPException(status_code=403, detail="You are not authorized for this building.")
+        if not has_permission(user_id, BUILDING_RESOURCE_TYPE, building_id, db):
+            raise HTTPException(status_code=403, detail=FORBIDDEN_BUILDING_DETAIL)
 
         effective_ref_now = _floor_to_5min(ref_now or datetime.now(timezone.utc))
         rows = _fetch_efficiency_tool_rows(
@@ -922,7 +1021,7 @@ async def get_dashboard_time_grid(
     "/hvac-schedule/{building_id}",
     response_model=DashboardScheduleResponse,
     responses={
-        403: {"description": "Forbidden: User not authorized for this building."},
+        403: {"description": FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION},
         404: {"description": "No HVAC unit found for this building."},
         500: {"description": "Internal server error."},
     },
@@ -930,7 +1029,7 @@ async def get_dashboard_time_grid(
 async def get_dashboard_hvac_schedule(
     building_id: int,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))],
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))],
     ref_now: Annotated[Optional[datetime], Query(description="Reference time in ISO format")] = None,
     future_hours: Annotated[float, Query(description="Hours of future schedule to include", ge=0.5, le=24)] = 3,
 ):
@@ -938,8 +1037,8 @@ async def get_dashboard_hvac_schedule(
         user_id = resolve_registered_user_id(user, db)
         from utils.policies import has_permission
 
-        if not has_permission(user_id, "building", building_id, db):
-            raise HTTPException(status_code=403, detail="You are not authorized for this building.")
+        if not has_permission(user_id, BUILDING_RESOURCE_TYPE, building_id, db):
+            raise HTTPException(status_code=403, detail=FORBIDDEN_BUILDING_DETAIL)
 
         effective_ref_now = _floor_to_5min(ref_now or datetime.now(timezone.utc))
         rows = _fetch_schedule_rows(db, building_id, effective_ref_now, future_hours)
@@ -959,7 +1058,7 @@ async def get_dashboard_hvac_schedule(
     "/hvac-schedule/{building_id}",
     response_model=DashboardScheduleResponse,
     responses={
-        403: {"description": "Forbidden: User not authorized for this building."},
+        403: {"description": FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION},
         404: {"description": "No HVAC unit found for this building."},
         500: {"description": "Internal server error."},
     },
@@ -968,14 +1067,14 @@ async def update_dashboard_hvac_schedule(
     building_id: int,
     payload: DashboardScheduleUpdateRequest,
     db: Annotated[Session, Depends(get_db)],
-    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))],
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_SCHEDULE_EDIT_ROLES))],
 ):
     try:
         user_id = resolve_registered_user_id(user, db)
         from utils.policies import has_permission
 
-        if not has_permission(user_id, "building", building_id, db):
-            raise HTTPException(status_code=403, detail="You are not authorized for this building.")
+        if not has_permission(user_id, BUILDING_RESOURCE_TYPE, building_id, db):
+            raise HTTPException(status_code=403, detail=FORBIDDEN_BUILDING_DETAIL)
 
         effective_ref_now = _floor_to_5min(payload.reference_time or datetime.now(timezone.utc))
         rows = _replace_schedule_rows(

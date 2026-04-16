@@ -215,6 +215,81 @@ def build_building_access_guard(auth_payload: dict):
     return _guard
 
 
+def create_socket_tasks(
+    session: WebSocketTaskSession,
+    task_id: str,
+    auth_payload: dict,
+) -> tuple[asyncio.Task[object], asyncio.Task[object], asyncio.Task[object]]:
+    receiver_task = asyncio.create_task(receive_loop(session), name=f"ws-receiver-{task_id}")
+    heartbeat_task = asyncio.create_task(heartbeat_loop(session), name=f"ws-heartbeat-{task_id}")
+    worker_task = asyncio.create_task(
+        run_registered_task(session, task_id, auth_payload),
+        name=f"ws-worker-{task_id}",
+    )
+    return receiver_task, heartbeat_task, worker_task
+
+
+async def handle_worker_completion(
+    session: WebSocketTaskSession,
+    worker_task: asyncio.Task[object],
+) -> None:
+    exc = worker_task.exception()
+    if exc is None and not session.closed:
+        await session.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Task complete")
+    elif exc is not None and not session.closed:
+        await session.close(code=status.WS_1011_INTERNAL_ERROR, reason="Task failed")
+
+
+async def handle_receiver_completion(
+    session: WebSocketTaskSession,
+    receiver_task: asyncio.Task[object],
+) -> None:
+    receiver_exc = receiver_task.exception()
+    if isinstance(receiver_exc, WebSocketDisconnect):
+        return
+    if receiver_exc is not None and not session.closed:
+        await session.send_json_message(
+            ErrorMessage(message="WebSocket receive loop failed.", code="receive_failed")
+        )
+        await session.close(code=status.WS_1011_INTERNAL_ERROR, reason="Receive loop failed")
+
+
+async def handle_heartbeat_completion(
+    session: WebSocketTaskSession,
+    heartbeat_task: asyncio.Task[object],
+) -> None:
+    heartbeat_exc = heartbeat_task.exception()
+    if heartbeat_exc and not isinstance(heartbeat_exc, HeartbeatTimeoutError) and not session.closed:
+        await session.send_json_message(
+            ErrorMessage(message="Heartbeat loop failed.", code="heartbeat_failed")
+        )
+        await session.close(code=status.WS_1011_INTERNAL_ERROR, reason="Heartbeat failed")
+
+
+async def handle_completed_socket_tasks(
+    session: WebSocketTaskSession,
+    done: set[asyncio.Task[object]],
+    worker_task: asyncio.Task[object],
+    receiver_task: asyncio.Task[object],
+    heartbeat_task: asyncio.Task[object],
+) -> None:
+    if worker_task in done:
+        await handle_worker_completion(session, worker_task)
+        return
+    if receiver_task in done:
+        await handle_receiver_completion(session, receiver_task)
+        return
+    if heartbeat_task in done:
+        await handle_heartbeat_completion(session, heartbeat_task)
+
+
+async def cancel_pending_tasks(pending: set[asyncio.Task[object]]) -> None:
+    for task in pending:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 @router.websocket("/ws/{task_id}")
 async def task_socket(websocket: WebSocket, task_id: str) -> None:
     await websocket.accept()
@@ -230,11 +305,10 @@ async def task_socket(websocket: WebSocket, task_id: str) -> None:
         return
 
     session = WebSocketTaskSession(websocket=websocket)
-    receiver_task = asyncio.create_task(receive_loop(session), name=f"ws-receiver-{task_id}")
-    heartbeat_task = asyncio.create_task(heartbeat_loop(session), name=f"ws-heartbeat-{task_id}")
-    worker_task = asyncio.create_task(
-        run_registered_task(session, task_id, auth_payload),
-        name=f"ws-worker-{task_id}",
+    receiver_task, heartbeat_task, worker_task = create_socket_tasks(
+        session,
+        task_id,
+        auth_payload,
     )
 
     try:
@@ -242,34 +316,14 @@ async def task_socket(websocket: WebSocket, task_id: str) -> None:
             {receiver_task, heartbeat_task, worker_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
-
-        if worker_task in done:
-            exc = worker_task.exception()
-            if exc is None and not session.closed:
-                await session.close(code=status.WS_1000_NORMAL_CLOSURE, reason="Task complete")
-            elif exc is not None and not session.closed:
-                await session.close(code=status.WS_1011_INTERNAL_ERROR, reason="Task failed")
-        elif receiver_task in done:
-            receiver_exc = receiver_task.exception()
-            if isinstance(receiver_exc, WebSocketDisconnect):
-                pass
-            elif receiver_exc is not None and not session.closed:
-                await session.send_json_message(
-                    ErrorMessage(message="WebSocket receive loop failed.", code="receive_failed")
-                )
-                await session.close(code=status.WS_1011_INTERNAL_ERROR, reason="Receive loop failed")
-        elif heartbeat_task in done:
-            heartbeat_exc = heartbeat_task.exception()
-            if heartbeat_exc and not isinstance(heartbeat_exc, HeartbeatTimeoutError) and not session.closed:
-                await session.send_json_message(
-                    ErrorMessage(message="Heartbeat loop failed.", code="heartbeat_failed")
-                )
-                await session.close(code=status.WS_1011_INTERNAL_ERROR, reason="Heartbeat failed")
-
-        for task in pending:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        await handle_completed_socket_tasks(
+            session,
+            done,
+            worker_task,
+            receiver_task,
+            heartbeat_task,
+        )
+        await cancel_pending_tasks(pending)
     except WebSocketDisconnect:
         pass
     finally:

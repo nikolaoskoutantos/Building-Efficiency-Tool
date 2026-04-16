@@ -83,68 +83,95 @@ class HVACOptimizerService:
         LEGACY_RF_MODEL_NAME = "hvac_random_forest"
 
 
+        def _set_model_load_failure(self, message: str, should_print: bool = False) -> bool:
+            if should_print:
+                print(message)
+            self.model_load_error = message
+            self.rf_model = None
+            return False
+
+        def _ensure_mlflow_runtime_available(self) -> bool:
+            if mlflow is None or MlflowClient is None:
+                return self._set_model_load_failure(
+                    "MLflow is not installed in this environment.",
+                    should_print=True,
+                )
+            return True
+
+        def _ensure_mlflow_tracking_uri_reachable(self) -> bool:
+            parsed_uri = urlparse(MLFLOW_TRACKING_URI)
+            if not parsed_uri.hostname or not parsed_uri.port:
+                return True
+
+            try:
+                connection = socket.create_connection((parsed_uri.hostname, parsed_uri.port), timeout=1.5)
+                connection.close()
+            except OSError as exc:
+                return self._set_model_load_failure(
+                    f"{ERR_MLFLOW_UNAVAILABLE} {exc}",
+                    should_print=True,
+                )
+            return True
+
+        def _find_latest_random_forest_model_version(
+            self,
+            client: MlflowClient,
+            building_id: str,
+        ) -> tuple[Any, Optional[str]]:
+            candidate_model_names = [self.RF_MODEL_NAME, self.LEGACY_RF_MODEL_NAME]
+            for model_name in candidate_model_names:
+                versions = client.search_model_versions(
+                    f"name = '{model_name}' and tags.buildingID = '{building_id}'"
+                )
+                if versions:
+                    return max(versions, key=lambda mv: mv.creation_timestamp), model_name
+
+            print(
+                f"No model versions found for {candidate_model_names} "
+                f"with buildingID={building_id}"
+            )
+            self.model_load_error = (
+                f"No MLflow model versions found for building {building_id}."
+            )
+            return None, None
+
+        def _apply_model_version_tags(self, model_version: Any) -> None:
+            if not model_version.tags:
+                return
+
+            a_tag = model_version.tags.get("a_coefficient")
+            if a_tag is not None:
+                self.a_coefficient = float(a_tag)
+
+            avg_cons_tag = model_version.tags.get("avg_consumption_off")
+            if avg_cons_tag is not None:
+                self.avg_consumption_off = float(avg_cons_tag)
+
         def _load_random_forest_from_mlflow(self) -> bool:
             """
             Load random forest model and optional avg_consumption_off from latest MLflow model version for this building.
             Expects model registered under RF_MODEL_NAME and tagged with buildingID.
             """
-            if mlflow is None or MlflowClient is None:
-                print("MLflow is not installed in this environment, cannot load registered models.")
-                self.model_load_error = "MLflow is not installed in this environment."
+            if not self._ensure_mlflow_runtime_available():
                 return False
+
             mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
             mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
             building_id = str(self.building_id)
             try:
-                parsed_uri = urlparse(MLFLOW_TRACKING_URI)
-                if parsed_uri.hostname and parsed_uri.port:
-                    try:
-                        with socket.create_connection((parsed_uri.hostname, parsed_uri.port), timeout=1.5):
-                            pass
-                    except OSError as exc:
-                        self.model_load_error = f"{ERR_MLFLOW_UNAVAILABLE} {exc}"
-                        print(self.model_load_error)
-                        self.rf_model = None
-                        return False
+                if not self._ensure_mlflow_tracking_uri_reachable():
+                    return False
 
                 client = MlflowClient(tracking_uri=mlflow.get_tracking_uri(), registry_uri=mlflow.get_registry_uri())
-                candidate_model_names = [self.RF_MODEL_NAME, self.LEGACY_RF_MODEL_NAME]
-                latest = None
-                chosen_model_name = None
-
-                for model_name in candidate_model_names:
-                    versions = client.search_model_versions(
-                        f"name = '{model_name}' and tags.buildingID = '{building_id}'"
-                    )
-                    if not versions:
-                        continue
-
-                    latest = max(versions, key=lambda mv: mv.creation_timestamp)
-                    chosen_model_name = model_name
-                    break
-
+                latest, chosen_model_name = self._find_latest_random_forest_model_version(client, building_id)
                 if latest is None or chosen_model_name is None:
-                    print(
-                        f"No model versions found for {candidate_model_names} "
-                        f"with buildingID={building_id}"
-                    )
-                    self.model_load_error = (
-                        f"No MLflow model versions found for building {building_id}."
-                    )
                     return False
 
                 model_uri = f"models:/{chosen_model_name}/{latest.version}"
                 self.rf_model = mlflow.sklearn.load_model(model_uri)
                 self.model_load_error = None
 
-                # Load a_coefficient and avg_consumption_off from tags
-                if latest.tags:
-                    a_tag = latest.tags.get("a_coefficient")
-                    if a_tag is not None:
-                        self.a_coefficient = float(a_tag)
-                    avg_cons_tag = latest.tags.get("avg_consumption_off")
-                    if avg_cons_tag is not None:
-                        self.avg_consumption_off = float(avg_cons_tag)
+                self._apply_model_version_tags(latest)
 
                 print(
                     f"Loaded Random Forest model from MLflow for building {self.building_id} "
@@ -153,9 +180,7 @@ class HVACOptimizerService:
                 return True
             except Exception as e:
                 print(f"Error fetching Random Forest model from MLflow: {e}")
-                self.model_load_error = f"Failed to load MLflow model: {e}"
-                self.rf_model = None
-                return False
+                return self._set_model_load_failure(f"Failed to load MLflow model: {e}")
 
         def __init__(self, building_id: int, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None):
             import time

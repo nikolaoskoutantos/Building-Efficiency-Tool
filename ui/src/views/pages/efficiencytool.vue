@@ -355,20 +355,22 @@ function serializeScheduleRowsForApi(rows) {
   }
 
   return rows.map((row) => {
-    const numericId =
-      Number.isInteger(row?.id)
-        ? row.id
-        : (typeof row?.id === 'string' && /^\d+$/.test(row.id) ? Number(row.id) : undefined)
+    let numericId
+    if (Number.isInteger(row?.id)) {
+      numericId = row.id
+    } else if (typeof row?.id === 'string' && /^\d+$/.test(row.id)) {
+      numericId = Number(row.id)
+    }
 
-      return {
-        ...(numericId !== undefined ? { id: numericId } : {}),
-        start: row?.start,
-        end: row?.end,
-        enabled: row?.enabled !== false,
-        setpoint: row?.enabled === false ? null : Number(row?.setpoint ?? slider1.value ?? null),
-      }
-    })
-  }
+    return {
+      ...(numericId !== undefined ? { id: numericId } : {}),
+      start: row?.start,
+      end: row?.end,
+      enabled: row?.enabled !== false,
+      setpoint: row?.enabled === false ? null : Number(row?.setpoint ?? slider1.value ?? null),
+    }
+  })
+}
 
 function extractApiErrorDetail(body, fallbackMessage) {
   if (typeof body?.detail === 'string' && body.detail.trim()) {
@@ -1094,138 +1096,152 @@ function generateControlScheduleFromRows(rows, controlStore) {
   return rows.map(row => (isScheduleActiveAtTimestamp(row?.ts, controlStore.schedule) ? 0.5 : 0))
 }
 
-const chartData = computed(() => {
-  const points = totalPoints;
-  if (dashboardTimeGridRows.value.length > 0) {
-    const labels = dashboardTimeGridRows.value.map(row => formatLocalDateTimeLabel(row.ts))
-    const referenceTime = dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || new Date().toISOString()
-    const indoor = dashboardTimeGridRows.value.map(row => (row.ts <= referenceTime ? row.temperature : null))
-      const forecast = dashboardTimeGridRows.value.map(row => (row.ts >= referenceTime ? row.outdoor_temperature : null))
-      const upper = forecast.map(value => (typeof value === 'number' ? value + 0.3 : null))
-      const lower = forecast.map(value => (typeof value === 'number' ? value - 0.3 : null))
-      const userSchedule = generateControlScheduleFromRows(dashboardTimeGridRows.value, controlStore)
-      const hasLoadedSchedule = controlStore.scheduleLoaded === true
-      const backendSchedule = dashboardTimeGridRows.value.map(row => row.hvac_is_on ? 0.5 : 0)
+function hasOptimizedOverlay() {
+  return optimizedControl.value.length === 12 && optimizedIndoorForecast.value.length === 12
+}
 
-    const datasets = [
-      {
-        label: 'Indoor Temperature (°C)',
-        backgroundColor: 'rgba(54, 162, 235, 0.15)',
-        borderColor: '#1976d2',
-        data: indoor,
-        fill: false,
-        tension: 0.4,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast (°C)',
-        backgroundColor: 'rgba(255, 193, 7, 0.15)',
-        borderColor: '#ffa000',
-        borderDash: [5, 5],
-        data: forecast,
-        fill: false,
-        tension: 0.4,
-        pointStyle: 'rectRot',
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast Upper Bound',
-        data: upper,
-        borderColor: 'rgba(255, 193, 7, 0.1)',
-        backgroundColor: 'rgba(255, 193, 7, 0.1)',
-        borderWidth: 0,
-        fill: '+1',
-        pointRadius: 0,
-        tension: 0.4,
-        order: 1,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast Lower Bound',
-        data: lower,
-        borderColor: 'rgba(255, 193, 7, 0.1)',
-        backgroundColor: 'rgba(255, 193, 7, 0.1)',
-        borderWidth: 0,
-        fill: false,
-        pointRadius: 0,
-        tension: 0.4,
-        order: 1,
-        yAxisID: 'y'
-      },
-        {
-          label: 'Control Schedule',
-          data: hasLoadedSchedule ? userSchedule : backendSchedule,
-          type: 'line',
-          borderColor: '#388e3c',
-        backgroundColor: 'rgba(76,175,80,0.1)',
-        borderWidth: 2,
-        stepped: true,
-        fill: false,
-        yAxisID: 'y1',
-        pointRadius: 0,
-        order: 2
-      }
-    ]
-
-    if (optimizedControl.value.length === 12 && optimizedIndoorForecast.value.length === 12) {
-      const startIdx = Math.max(labels.length - 36, 0)
-      const optControlArr = new Array(labels.length).fill(null)
-      const optIndoorArr = new Array(labels.length).fill(null)
-      for (let i = 0; i < 12 && startIdx + i < labels.length; i++) {
-        optControlArr[startIdx + i] = optimizedControl.value[i] ? 0.5 : 0
-        optIndoorArr[startIdx + i] = optimizedIndoorForecast.value[i]
-      }
-      datasets.push({
-        label: 'Optimized Control',
-        data: optControlArr,
-        type: 'line',
-        borderColor: '#d32f2f',
-        backgroundColor: 'rgba(244,67,54,0.10)',
-        borderWidth: 2,
-        borderDash: [6, 4],
-        stepped: true,
-        fill: false,
-        yAxisID: 'y1',
-        pointRadius: 2,
-        order: 3
-      })
-      datasets.push({
-        label: 'Optimized Indoor Forecast',
-        data: optIndoorArr,
-        type: 'line',
-        borderColor: '#d32f2f',
-        backgroundColor: 'rgba(244,67,54,0.10)',
-        borderWidth: 2,
-        borderDash: [6, 4],
-        fill: false,
-        yAxisID: 'y',
-        pointRadius: 2,
-        order: 4
-      })
-    }
-
-    return { labels, datasets }
+function buildDashboardOptimizedDatasets(labelCount) {
+  if (!hasOptimizedOverlay()) {
+    return []
   }
 
+  const startIdx = Math.max(labelCount - 36, 0)
+  const optControlArr = new Array(labelCount).fill(null)
+  const optIndoorArr = new Array(labelCount).fill(null)
+
+  for (let i = 0; i < 12 && startIdx + i < labelCount; i++) {
+    optControlArr[startIdx + i] = optimizedControl.value[i] ? 0.5 : 0
+    optIndoorArr[startIdx + i] = optimizedIndoorForecast.value[i]
+  }
+
+  return [
+    {
+      label: 'Optimized Control',
+      data: optControlArr,
+      type: 'line',
+      borderColor: '#d32f2f',
+      backgroundColor: 'rgba(244,67,54,0.10)',
+      borderWidth: 2,
+      borderDash: [6, 4],
+      stepped: true,
+      fill: false,
+      yAxisID: 'y1',
+      pointRadius: 2,
+      order: 3
+    },
+    {
+      label: 'Optimized Indoor Forecast',
+      data: optIndoorArr,
+      type: 'line',
+      borderColor: '#d32f2f',
+      backgroundColor: 'rgba(244,67,54,0.10)',
+      borderWidth: 2,
+      borderDash: [6, 4],
+      fill: false,
+      yAxisID: 'y',
+      pointRadius: 2,
+      order: 4
+    },
+  ]
+}
+
+function buildDashboardChartData(rows) {
+  const labels = rows.map(row => formatLocalDateTimeLabel(row.ts))
+  const referenceTime = dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || new Date().toISOString()
+  const indoor = rows.map(row => (row.ts <= referenceTime ? row.temperature : null))
+  const forecast = rows.map(row => (row.ts >= referenceTime ? row.outdoor_temperature : null))
+  const upper = forecast.map(value => (typeof value === 'number' ? value + 0.3 : null))
+  const lower = forecast.map(value => (typeof value === 'number' ? value - 0.3 : null))
+  const userSchedule = generateControlScheduleFromRows(rows, controlStore)
+  const backendSchedule = rows.map(row => row.hvac_is_on ? 0.5 : 0)
+
+  const datasets = [
+    {
+      label: 'Indoor Temperature (°C)',
+      backgroundColor: 'rgba(54, 162, 235, 0.15)',
+      borderColor: '#1976d2',
+      data: indoor,
+      fill: false,
+      tension: 0.4,
+      yAxisID: 'y'
+    },
+    {
+      label: 'Forecast (°C)',
+      backgroundColor: 'rgba(255, 193, 7, 0.15)',
+      borderColor: '#ffa000',
+      borderDash: [5, 5],
+      data: forecast,
+      fill: false,
+      tension: 0.4,
+      pointStyle: 'rectRot',
+      yAxisID: 'y'
+    },
+    {
+      label: 'Forecast Upper Bound',
+      data: upper,
+      borderColor: 'rgba(255, 193, 7, 0.1)',
+      backgroundColor: 'rgba(255, 193, 7, 0.1)',
+      borderWidth: 0,
+      fill: '+1',
+      pointRadius: 0,
+      tension: 0.4,
+      order: 1,
+      yAxisID: 'y'
+    },
+    {
+      label: 'Forecast Lower Bound',
+      data: lower,
+      borderColor: 'rgba(255, 193, 7, 0.1)',
+      backgroundColor: 'rgba(255, 193, 7, 0.1)',
+      borderWidth: 0,
+      fill: false,
+      pointRadius: 0,
+      tension: 0.4,
+      order: 1,
+      yAxisID: 'y'
+    },
+    {
+      label: 'Control Schedule',
+      data: controlStore.scheduleLoaded === true ? userSchedule : backendSchedule,
+      type: 'line',
+      borderColor: '#388e3c',
+      backgroundColor: 'rgba(76,175,80,0.1)',
+      borderWidth: 2,
+      stepped: true,
+      fill: false,
+      yAxisID: 'y1',
+      pointRadius: 0,
+      order: 2
+    },
+    ...buildDashboardOptimizedDatasets(labels.length),
+  ]
+
+  return { labels, datasets }
+}
+
+function buildFallbackWeatherSeries(points) {
   const indoor = Array.from({ length: points }, (_, i) =>
     i < pastPoints ? 23 + 0.01 * i + randn_bm() * 0.15 : null
-  );
+  )
   const outdoor = Array.from({ length: points }, (_, i) =>
     i < pastPoints ? 22 + 0.008 * i + randn_bm() * 0.18 : null
-  );
-  let lastOutdoor = outdoor[pastPoints - 1] ?? 22;
+  )
+  const lastOutdoor = outdoor[pastPoints - 1] ?? 22
   const forecast = Array.from({ length: points }, (_, i) =>
     i >= pastPoints ? lastOutdoor + 0.01 * (i - pastPoints) + randn_bm() * 0.2 : null
-  );
+  )
   const upper = Array.from({ length: points }, (_, i) =>
     i >= pastPoints ? (forecast[i] ?? 0) + 0.3 : null
-  );
+  )
   const lower = Array.from({ length: points }, (_, i) =>
     i >= pastPoints ? (forecast[i] ?? 0) - 0.3 : null
-  );
+  )
 
-  // Map dropdown service to datasets
-  const serviceToDataset = {
+  return { indoor, outdoor, forecast, upper, lower }
+}
+
+function buildFallbackServiceDatasets(indoor, outdoor, forecast, upper, lower) {
+  return {
     weather: [
       {
         label: 'Indoor Temperature (°C)',
@@ -1358,41 +1374,36 @@ const chartData = computed(() => {
         yAxisID: 'y'
       }
     ]
-  };
+  }
+}
 
-  // Collect datasets for selected services
-  let datasets = [];
+function collectSelectedServiceDatasets(serviceToDataset) {
+  let datasets = []
   for (const service of selectedServices.value) {
     if (serviceToDataset[service]) {
-      datasets = datasets.concat(serviceToDataset[service]);
+      datasets = datasets.concat(serviceToDataset[service])
     }
   }
 
-  // Always show control schedule
-    datasets.push({
-      label: 'Control Schedule',
-      data: generateControlScheduleData(points, startDate, controlStore),
-      type: 'line',
-      borderColor: '#2e7d32',
-      backgroundColor: 'rgba(46, 125, 50, 0.12)',
-      borderWidth: 2.5,
-      stepped: true,
-      fill: 'origin',
-      yAxisID: 'y1',
-      pointRadius: 0,
-      order: 2
-    });
+  return datasets
+}
 
-  // Add optimized control and forecast if present
-  if (optimizedControl.value.length === 12 && optimizedIndoorForecast.value.length === 12) {
-    // Find start index for next hour (after pastPoints)
-    const startIdx = pastPoints;
-    // Build array for chart length, fill with null except for next 12 intervals
-    const optControlArr = new Array(points).fill(null);
-    for (let i = 0; i < 12; i++) {
-      optControlArr[startIdx + i] = optimizedControl.value[i] ? 0.5 : 0;
-    }
-    datasets.push({
+function buildFallbackOptimizedDatasets(points, indoor) {
+  if (!hasOptimizedOverlay()) {
+    return []
+  }
+
+  const startIdx = pastPoints
+  const optControlArr = new Array(points).fill(null)
+  const optIndoorArr = new Array(points).fill(null)
+
+  for (let i = 0; i < 12; i++) {
+    optControlArr[startIdx + i] = optimizedControl.value[i] ? 0.5 : 0
+    optIndoorArr[startIdx + i] = (indoor[startIdx + i] ?? 24) * 0.8 + (optimizedIndoorForecast.value[i] ?? 25) * 0.2
+  }
+
+  return [
+    {
       label: 'Optimized Control',
       data: optControlArr,
       type: 'line',
@@ -1405,13 +1416,8 @@ const chartData = computed(() => {
       yAxisID: 'y1',
       pointRadius: 2,
       order: 3
-    });
-    const optIndoorArr = new Array(points).fill(null);
-    for (let i = 0; i < 12; i++) {
-      // Make optimized indoor forecast close to indoor (blue) line, but not identical
-      optIndoorArr[startIdx + i] = (indoor[startIdx + i] ?? 24) * 0.8 + (optimizedIndoorForecast.value[i] ?? 25) * 0.2;
-    }
-    datasets.push({
+    },
+    {
       label: 'Optimized Indoor Forecast',
       data: optIndoorArr,
       type: 'line',
@@ -1423,14 +1429,45 @@ const chartData = computed(() => {
       yAxisID: 'y',
       pointRadius: 2,
       order: 4
-    });
-  }
+    },
+  ]
+}
+
+function buildFallbackChartData(points) {
+  const { indoor, outdoor, forecast, upper, lower } = buildFallbackWeatherSeries(points)
+  const serviceToDataset = buildFallbackServiceDatasets(indoor, outdoor, forecast, upper, lower)
+  const datasets = collectSelectedServiceDatasets(serviceToDataset)
+
+  datasets.push({
+    label: 'Control Schedule',
+    data: generateControlScheduleData(points, startDate, controlStore),
+    type: 'line',
+    borderColor: '#2e7d32',
+    backgroundColor: 'rgba(46, 125, 50, 0.12)',
+    borderWidth: 2.5,
+    stepped: true,
+    fill: 'origin',
+    yAxisID: 'y1',
+    pointRadius: 0,
+    order: 2
+  })
+
+  datasets.push(...buildFallbackOptimizedDatasets(points, indoor))
 
   return {
     labels: chartLabels,
     datasets
-  };
-});
+  }
+}
+
+const chartData = computed(() => {
+  const points = totalPoints
+  if (dashboardTimeGridRows.value.length > 0) {
+    return buildDashboardChartData(dashboardTimeGridRows.value)
+  }
+
+  return buildFallbackChartData(points)
+})
 
 const chartOptions = computed(() => {
   const axisColor = isDarkTheme.value ? '#cbd5e1' : '#445066'
