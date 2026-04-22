@@ -2,14 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, WebSocke
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.predictor import Predictor, TrainingHistory
+from models.optimization import OptimizationResult
 from services.hvac_optimizer_service import HVACOptimizerService
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Any
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from time import perf_counter
+from datetime import datetime, timezone
+import hashlib
+import json
 import os
 
 from utils.auth_dependencies import get_current_user_role, get_current_websocket_role, resolve_registered_user_id
+from utils.rate_limit import ml_rate_limit_dependency
 router = APIRouter(
     prefix="/predict",
     tags=["Predictors"],
@@ -85,6 +90,90 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    finally:
+        db.close()
+
+
+def _run_hvac_optimization(request: HVACOptimizationRequest) -> dict:
+    hvac_optimizer = HVACOptimizerService(request.building_id)
+    safe_duration = clamp_duration(request.duration)
+
+    if request.optimization_type == "peak":
+        return hvac_optimizer.biased_random_search(
+            starting_temp=request.starting_temperature,
+            starting_time=request.starting_time,
+            outdoor_temps=request.outdoor_temperatures,
+            setpoint=request.setpoint,
+            duration=safe_duration,
+        )
+
+    return hvac_optimizer.normal_conditions_optimizer(
+        starting_temp=request.starting_temperature,
+        starting_time=request.starting_time,
+        outdoor_temps=request.outdoor_temperatures,
+        setpoint=request.setpoint,
+        duration=safe_duration,
+    )
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
+def _stable_hash(payload: Any) -> str:
+    normalized = _json_safe(payload)
+    raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _persist_optimization_result(request: HVACOptimizationRequest, result: dict, user: dict) -> None:
+    db = SessionLocal()
+    try:
+        user_id = resolve_registered_user_id(user, db)
+        safe_input = _json_safe(request.model_dump())
+        safe_output = _json_safe(result)
+
+        baseline_all_on = safe_output.get("baseline_all_on") or {}
+        optimized_consumption = (
+            safe_output.get("energy_consumption")
+            or (safe_output.get("optimized_candidate") or {}).get("energy_consumption")
+        )
+        baseline_consumption = baseline_all_on.get("energy_consumption")
+        saved_kwh = (
+            max(float(baseline_consumption) - float(optimized_consumption), 0)
+            if baseline_consumption is not None and optimized_consumption is not None
+            else None
+        )
+
+        db.add(
+            OptimizationResult(
+                building_id=request.building_id,
+                user_id=user_id,
+                optimization_time=datetime.now(timezone.utc),
+                input_hash=_stable_hash(safe_input),
+                output_hash=_stable_hash(safe_output),
+                input_data=safe_input,
+                output_data=safe_output,
+                energy_saving_kwh=saved_kwh,
+                baseline_consumption_kwh=baseline_consumption,
+                optimized_consumption_kwh=optimized_consumption,
+                environmental_points=safe_output.get("avg_deviation_from_setpoint"),
+                notes=safe_output.get("recommendation_type"),
+                is_optimized=True,
+            )
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        print(f"[predict.py] Warning: failed to persist optimization result: {exc}")
     finally:
         db.close()
 
@@ -173,9 +262,9 @@ def predict_one(
         500: {"description": "Prediction failed"},
     },
 )
-async def predict_hvac(request: HVACPredictionRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+async def predict_hvac(request: HVACPredictionRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))], _rl: Annotated[None, Depends(ml_rate_limit_dependency)]):
     """Predict temperature and energy consumption for HVAC operation schedule."""
-    _require_building_access(user, request.building_id)
+    await run_in_threadpool(_require_building_access, user, request.building_id)
     try:
         hvac_optimizer = HVACOptimizerService(request.building_id)
         safe_duration = clamp_duration(request.duration)
@@ -203,28 +292,12 @@ async def predict_hvac(request: HVACPredictionRequest, user: Annotated[dict, Dep
         500: {"description": "Optimization failed"},
     },
 )
-async def optimize_hvac_schedule(request: HVACOptimizationRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+async def optimize_hvac_schedule(request: HVACOptimizationRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))], _rl: Annotated[None, Depends(ml_rate_limit_dependency)]):
     """Optimize HVAC operation schedule for energy efficiency."""
-    _require_building_access(user, request.building_id)
+    await run_in_threadpool(_require_building_access, user, request.building_id)
     try:
-        hvac_optimizer = HVACOptimizerService(request.building_id)
-        safe_duration = clamp_duration(request.duration)
-        if request.optimization_type == "peak":
-            result = hvac_optimizer.biased_random_search(
-                starting_temp=request.starting_temperature,
-                starting_time=request.starting_time,
-                outdoor_temps=request.outdoor_temperatures,
-                setpoint=request.setpoint,
-                duration=safe_duration
-            )
-        else:  # normal conditions
-            result = hvac_optimizer.normal_conditions_optimizer(
-                starting_temp=request.starting_temperature,
-                starting_time=request.starting_time,
-                outdoor_temps=request.outdoor_temperatures,
-                setpoint=request.setpoint,
-                duration=safe_duration
-            )
+        result = await run_in_threadpool(_run_hvac_optimization, request)
+        await run_in_threadpool(_persist_optimization_result, request, result, user)
         return {
             "optimization_type": request.optimization_type,
             "result": result,
@@ -390,7 +463,7 @@ async def get_all_hvac_models(user: Annotated[dict, Depends(get_current_user_rol
 )
 async def get_hvac_training_history(building_id: int, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))]):
     """Get training history for a specific building."""
-    _require_building_access(user, building_id)
+    await run_in_threadpool(_require_building_access, user, building_id)
     try:
         hvac_optimizer = HVACOptimizerService(building_id)
         history = hvac_optimizer.get_training_history()
@@ -409,9 +482,9 @@ async def get_hvac_training_history(building_id: int, user: Annotated[dict, Depe
         500: {"description": "Schedule evaluation failed"},
     },
 )
-async def evaluate_hvac_schedule(request: HVACPredictionRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))]):
+async def evaluate_hvac_schedule(request: HVACPredictionRequest, user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))], _rl: Annotated[None, Depends(ml_rate_limit_dependency)]):
     """Evaluate a specific HVAC operation schedule with detailed metrics."""
-    _require_building_access(user, request.building_id)
+    await run_in_threadpool(_require_building_access, user, request.building_id)
     try:
         hvac_optimizer = HVACOptimizerService(request.building_id)
         safe_duration = clamp_duration(request.duration)

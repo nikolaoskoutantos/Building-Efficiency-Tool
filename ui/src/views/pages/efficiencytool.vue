@@ -65,60 +65,6 @@
           <template #icon>
             <img src="/energy-svgrepo-com.svg" alt="Energy" height="52" class="my-4" />
           </template>
-          <template #chart>
-            <CChart
-              class="position-absolute w-100 h-100"
-              type="line"
-              :data="{
-                labels: [
-                  'January',
-                  'February',
-                  'March',
-                  'April',
-                  'May',
-                  'June',
-                  'July',
-                ],
-                datasets: [
-                  {
-                    backgroundColor: 'rgba(255,255,255,.1)',
-                    borderColor: 'rgba(255,255,255,.55)',
-                    pointHoverBackgroundColor: '#fff',
-                    borderWidth: 2,
-                    data: [65, 59, 84, 84, 51, 55, 40],
-                    fill: true,
-                  },
-                ],
-              }"
-              :options="{
-                elements: {
-                  line: {
-                    tension: 0.4,
-                  },
-                  point: {
-                    radius: 0,
-                    hitRadius: 10,
-                    hoverRadius: 4,
-                    hoverBorderWidth: 3,
-                  },
-                },
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: {
-                    display: false,
-                  },
-                },
-                scales: {
-                  x: {
-                    display: false,
-                  },
-                  y: {
-                    display: false,
-                  },
-                },
-              }"
-            />
-          </template>
         </CWidgetStatsD>
       </CCol>
       <CCol :sm="6">
@@ -128,60 +74,6 @@
         >
           <template #icon>
             <img src="/reward-svgrepo-com.svg" alt="Reward" height="52" class="my-4" />
-          </template>
-          <template #chart>
-            <CChart
-              class="position-absolute w-100 h-100"
-              type="line"
-              :data="{
-                labels: [
-                  'January',
-                  'February',
-                  'March',
-                  'April',
-                  'May',
-                  'June',
-                  'July',
-                ],
-                datasets: [
-                  {
-                    backgroundColor: 'rgba(255,255,255,.1)',
-                    borderColor: 'rgba(255,255,255,.55)',
-                    pointHoverBackgroundColor: '#fff',
-                    borderWidth: 2,
-                    data: [1, 13, 9, 17, 34, 41, 38],
-                    fill: true,
-                  },
-                ],
-              }"
-              :options="{
-                elements: {
-                  line: {
-                    tension: 0.4,
-                  },
-                  point: {
-                    radius: 0,
-                    hitRadius: 10,
-                    hoverRadius: 4,
-                    hoverBorderWidth: 3,
-                  },
-                },
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: {
-                    display: false,
-                  },
-                },
-                scales: {
-                  x: {
-                    display: false,
-                  },
-                  y: {
-                    display: false,
-                  },
-                },
-              }"
-            />
           </template>
         </CWidgetStatsD>
       </CCol>
@@ -241,6 +133,7 @@
       :optimize-disabled="!canOptimize"
       :optimize-button-label="optimizeButtonLabel"
       :schedule-saving="scheduleSaving"
+      :schedule-save-message="scheduleSaveMessage"
       @optimize="runOptimization"
       @schedule-change="handleScheduleChange"
     />
@@ -280,7 +173,7 @@
         <CChartLine :key="chartKey" :data="chartData" :options="chartOptions" class="mb-4" style="width: 100%; height: 600px;" />
       </div>
     </div>
-    <EnergyBarChart :optimization-summary="optimizationSummary" class="mb-4" />
+    <EnergyBarChart class="mb-4" />
   </div>
 </template>
 
@@ -290,42 +183,23 @@ import RatingOne from '@/components/Rating.vue'
 import EnergyBarChart from '@/components/EnergyBarChart.vue'
 import HvacScheduleTable from '@/components/HvacScheduleTable.vue'
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CFormRange, CFormSwitch, CDropdown, CDropdownToggle, CDropdownMenu, CSpinner, CAlert, useColorModes } from '@coreui/vue'
+import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CFormRange, CFormSwitch, CDropdown, CDropdownToggle, CDropdownMenu, CSpinner, CAlert } from '@coreui/vue'
+import { useThemeStore } from '@/stores/theme.js'
 import { useControlStore } from '@/stores/control.js'
 import { useAlertsStore } from '@/stores/alerts.js'
 import { useDashboardStore } from '@/stores/dashboard.js'
 import { useAuthStore } from '@/stores/auth.js'
-import { buildApiUrl, apiRequest } from '@/config/api.js'
+import { buildApiUrl } from '@/config/api.js'
 
 const controlStore = useControlStore()
 const alertsStore = useAlertsStore()
 const dashboardStore = useDashboardStore()
 const authStore = useAuthStore()
-const { colorMode } = useColorModes('coreui-free-vue-admin-template-theme')
-const isDarkTheme = computed(() => colorMode.value === 'dark')
-
-// Helper function for cryptographically secure random number generation
-function getSecureRandom() {
-  // Always use crypto.getRandomValues - no fallback to Math.random()
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    return crypto.getRandomValues(new Uint32Array(1))[0] / (0xffffffff + 1);
-  }
-  
-  // If crypto is not available, return a deterministic value for demo purposes
-  // This is safe since it's only used for chart visualization, not security
-  return 0.5;
-}
-
-function randn_bm() {
-  let u = 0, v = 0;
-  while(u === 0) u = getSecureRandom();
-  while(v === 0) v = getSecureRandom();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
+const themeStore = useThemeStore()
+const isDarkTheme = computed(() => themeStore.theme === 'dark')
 
 const chartKey = ref(0)
 
-// Optimization mock data
 const optimizedControl = ref([]) // Array of 12 true/false
 const optimizedIndoorForecast = ref([]) // Array of 12 numbers
 const optimizeLoading = ref(false)
@@ -334,14 +208,16 @@ const optimizeError = ref('')
 const optimizeStatus = ref('')
 const optimizationResult = ref(null)
 const scheduleSaving = ref(false)
+const scheduleSaveMessage = ref('')
 const dismissOptimizationReadiness = ref(false)
 const dashboardTimeGridRows = computed(() => dashboardStore.efficiencyTimeGrid.rows || [])
 const dashboardTimeGridCurrentRow = computed(() => dashboardStore.efficiencyTimeGrid.currentRow || null)
 const dashboardReferenceTime = computed(() => dashboardStore.efficiencyTimeGrid.referenceTime || null)
 const optimizationContext = computed(() => dashboardStore.efficiencyTimeGrid.optimizationContext || null)
 let scheduleSaveTimeout = null
+let scheduleSaveMessageTimeout = null
 const syncingTopControls = ref(false)
-const applyingOptimizedSchedule = ref(false)
+const optimizationRequestTimeoutMs = 120000
 
 function formatDateForApi(dateString) {
   const date = new Date(dateString.replace(' ', 'T'))
@@ -372,25 +248,14 @@ function serializeScheduleRowsForApi(rows) {
   })
 }
 
-function extractApiErrorDetail(body, fallbackMessage) {
-  if (typeof body?.detail === 'string' && body.detail.trim()) {
-    return body.detail.trim()
-  }
-  if (Array.isArray(body?.detail) && body.detail.length > 0) {
-    return body.detail
-      .map((item) => item?.msg || JSON.stringify(item))
-      .filter(Boolean)
-      .join(' | ')
-  }
-  if (typeof body?.message === 'string' && body.message.trim()) {
-    return body.message.trim()
-  }
-  return fallbackMessage
-}
-
 function toFiniteNumber(value) {
   const numericValue = Number(value)
   return Number.isFinite(numericValue) ? numericValue : null
+}
+
+function energyRawToKwh(value) {
+  const numericValue = toFiniteNumber(value)
+  return numericValue == null ? null : numericValue / 1000
 }
 
 function formatEnergyValue(value) {
@@ -421,9 +286,9 @@ const optimizationSummary = computed(() => {
     return null
   }
 
-  const baselineAllOnKwh = toFiniteNumber(result?.baseline_all_on?.energy_consumption)
-  const baselineAllOffKwh = toFiniteNumber(result?.baseline_all_off?.energy_consumption)
-  const optimizedConsumptionKwh = toFiniteNumber(
+  const baselineAllOnKwh = energyRawToKwh(result?.baseline_all_on?.energy_consumption)
+  const baselineAllOffKwh = energyRawToKwh(result?.baseline_all_off?.energy_consumption)
+  const optimizedConsumptionKwh = energyRawToKwh(
     result?.energy_consumption ?? result?.optimized_candidate?.energy_consumption,
   )
   const savedKwh =
@@ -578,11 +443,6 @@ function getOutdoorTemperaturesForOptimization() {
     return Number.isFinite(numericSetpoint) ? numericSetpoint : null
   }
 
-  function formatTimeLabelFromDate(value) {
-    const date = value instanceof Date ? value : new Date(value)
-    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  }
-
   function materializeScheduleRowsLocal(rows, referenceTime) {
     if (!Array.isArray(rows) || !referenceTime) {
       return []
@@ -594,21 +454,21 @@ function getOutdoorTemperaturesForOptimization() {
     }
 
     const refClockMinutes = localRef.getHours() * 60 + localRef.getMinutes()
-    let dayOffset = 0
-    let previousStartMinutes = null
 
     return rows
       .filter((row) => typeof row?.start === 'string' && typeof row?.end === 'string')
-      .map((row, index) => {
+      .map((row) => {
         const [startHour, startMinute] = row.start.split(':').map(Number)
         const [endHour, endMinute] = row.end.split(':').map(Number)
         const startClockMinutes = startHour * 60 + startMinute
         const endClockMinutes = endHour * 60 + endMinute
+        const crossesMidnight = endClockMinutes <= startClockMinutes
+        let dayOffset = 0
 
-        if (index === 0 && startClockMinutes < refClockMinutes) {
+        if (crossesMidnight && refClockMinutes < endClockMinutes) {
+          dayOffset = -1
+        } else if (!crossesMidnight && endClockMinutes <= refClockMinutes) {
           dayOffset = 1
-        } else if (previousStartMinutes !== null && startClockMinutes < previousStartMinutes) {
-          dayOffset += 1
         }
 
         const start = new Date(localRef)
@@ -618,11 +478,9 @@ function getOutdoorTemperaturesForOptimization() {
         const end = new Date(localRef)
         end.setHours(endHour, endMinute, 0, 0)
         end.setDate(end.getDate() + dayOffset)
-        if (endClockMinutes <= startClockMinutes) {
+        if (crossesMidnight) {
           end.setDate(end.getDate() + 1)
         }
-
-        previousStartMinutes = startClockMinutes
 
         return {
           start,
@@ -632,6 +490,7 @@ function getOutdoorTemperaturesForOptimization() {
         }
       })
       .filter((row) => row.end > row.start)
+      .sort((a, b) => a.start.getTime() - b.start.getTime())
   }
 
   function getNextRelevantScheduleRow(rows, referenceTime) {
@@ -679,111 +538,28 @@ function getOutdoorTemperaturesForOptimization() {
     chartKey.value += 1
   }
 
-  function buildOptimizedSegments(operation, optimizationStart, setpoint) {
-    if (!Array.isArray(operation) || operation.length === 0) {
-      return []
+  function restoreOptimizationResult(result) {
+    if (!result || typeof result !== 'object') {
+      return
     }
 
-    const segments = []
-    const stepMinutes = 5
-    let currentEnabled = null
-    let segmentStart = null
+    const operation = Array.isArray(result.recommended_operation)
+      ? result.recommended_operation.slice(0, 12)
+      : []
+    const temperatures = Array.isArray(result.temperatures)
+      ? result.temperatures.slice(1, 13)
+      : []
 
-    for (let index = 0; index < operation.length; index += 1) {
-      const enabled = Boolean(operation[index])
-      const intervalStart = new Date(optimizationStart.getTime() + index * stepMinutes * 60000)
-
-      if (currentEnabled === null) {
-        currentEnabled = enabled
-        segmentStart = intervalStart
-        continue
-      }
-
-      if (enabled !== currentEnabled) {
-        segments.push({
-          start: segmentStart,
-          end: intervalStart,
-          enabled: currentEnabled,
-          setpoint: currentEnabled ? Number(setpoint) : null,
-        })
-        currentEnabled = enabled
-        segmentStart = intervalStart
-      }
+    if (operation.length === 0 || temperatures.length === 0) {
+      return
     }
 
-    segments.push({
-      start: segmentStart,
-      end: new Date(optimizationStart.getTime() + operation.length * stepMinutes * 60000),
-      enabled: currentEnabled,
-      setpoint: currentEnabled ? Number(setpoint) : null,
-    })
-
-    return segments
+    optimizationResult.value = result
+    optimizedControl.value = operation.map(value => Boolean(value))
+    optimizedIndoorForecast.value = temperatures
+    chartKey.value += 1
   }
 
-  function overlayOptimizedScheduleRows(existingRows, operation, referenceTime, setpoint) {
-    const optimizationStart = new Date(referenceTime)
-    if (Number.isNaN(optimizationStart.getTime())) {
-      return Array.isArray(existingRows) ? existingRows : []
-    }
-
-    const optimizedSegments = buildOptimizedSegments(operation, optimizationStart, setpoint)
-    if (optimizedSegments.length === 0) {
-      return Array.isArray(existingRows) ? existingRows : []
-    }
-
-    const optimizationEnd = optimizedSegments[optimizedSegments.length - 1].end
-    const preservedSegments = []
-
-    for (const row of materializeScheduleRowsLocal(existingRows, referenceTime)) {
-      if (row.end <= optimizationStart || row.start >= optimizationEnd) {
-        preservedSegments.push(row)
-        continue
-      }
-
-      if (row.start < optimizationStart) {
-        preservedSegments.push({
-          ...row,
-          end: optimizationStart,
-        })
-      }
-
-      if (row.end > optimizationEnd) {
-        preservedSegments.push({
-          ...row,
-          start: optimizationEnd,
-        })
-      }
-    }
-
-    const mergedSegments = [...preservedSegments, ...optimizedSegments]
-      .filter((row) => row.end > row.start)
-      .sort((a, b) => a.start.getTime() - b.start.getTime())
-      .reduce((accumulator, row) => {
-        const previous = accumulator[accumulator.length - 1]
-        if (
-          previous &&
-          previous.end.getTime() === row.start.getTime() &&
-          previous.enabled === row.enabled &&
-          ((previous.enabled === false && row.enabled === false) || previous.setpoint === row.setpoint)
-        ) {
-          previous.end = row.end
-          return accumulator
-        }
-
-        accumulator.push({ ...row })
-        return accumulator
-      }, [])
-
-    return mergedSegments.map((row, index) => ({
-      id: `optimized-${row.start.getTime()}-${index}`,
-      start: formatTimeLabelFromDate(row.start),
-      end: formatTimeLabelFromDate(row.end),
-      enabled: row.enabled,
-      setpoint: row.enabled ? row.setpoint : null,
-    }))
-  }
-  
   async function loadDashboardSchedule(refNow = null) {
     const buildingId = dashboardStore.defaultBuilding?.id
     if (!buildingId) {
@@ -842,8 +618,12 @@ async function saveDashboardSchedule(rows) {
 }
 
 function handleScheduleChange(rows) {
-  if (!applyingOptimizedSchedule.value) {
-    clearOptimizationResultState()
+  clearOptimizationResultState()
+  scheduleSaveMessage.value = ''
+
+  if (scheduleSaveMessageTimeout) {
+    clearTimeout(scheduleSaveMessageTimeout)
+    scheduleSaveMessageTimeout = null
   }
 
   void syncTopControlsFromSchedule(
@@ -859,6 +639,11 @@ function handleScheduleChange(rows) {
     scheduleSaving.value = true
     try {
       await saveDashboardSchedule(rows)
+      scheduleSaveMessage.value = 'Schedule updated in the database.'
+      scheduleSaveMessageTimeout = setTimeout(() => {
+        scheduleSaveMessage.value = ''
+        scheduleSaveMessageTimeout = null
+      }, 3500)
     } catch (error) {
       optimizeError.value = error.message || 'Failed to save HVAC schedule.'
     } finally {
@@ -879,6 +664,7 @@ function handleScheduleChange(rows) {
       schedulePayload?.rows || controlStore.schedule,
       dashboardReferenceTime.value || payload?.current_row?.ts || null,
     )
+    restoreOptimizationResult(payload?.latest_optimization_result)
   }
 
 const canOptimize = computed(() =>
@@ -905,7 +691,67 @@ const optimizeButtonLabel = computed(() => {
   return 'Optimize'
 })
 
-function runOptimization() {
+function formatOptimizationStatus(status) {
+  if (status === 'accepted') {
+    return 'Optimization request accepted...'
+  }
+  if (status === 'initializing_optimizer') {
+    return 'Preparing HVAC optimizer...'
+  }
+  if (status === 'optimizer_ready') {
+    return 'Optimizer ready...'
+  }
+  if (status === 'running_optimization') {
+    return 'Running optimization...'
+  }
+  return 'Optimizing HVAC control...'
+}
+
+async function runOptimizationRequest(payload) {
+  const token = authStore.getJwtToken?.()
+  if (!token) {
+    throw new Error('You must be logged in before running optimization.')
+  }
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    controller.abort()
+  }, optimizationRequestTimeoutMs)
+
+  try {
+    optimizeStatus.value = formatOptimizationStatus('running_optimization')
+    const response = await fetch(buildApiUrl('/predict/hvac/optimize'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      credentials: 'include',
+      signal: controller.signal,
+      body: JSON.stringify(payload),
+    })
+
+    const responseBody = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(
+        responseBody?.detail ||
+        responseBody?.message ||
+        `Optimization failed: ${response.status}`,
+      )
+    }
+
+    return responseBody
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('Optimization timed out. Please try again.')
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function runOptimization() {
   if (!canOptimize.value) {
     optimizeError.value = optimizationReadinessMessage.value || 'Optimization inputs are not ready yet.'
     return
@@ -916,73 +762,39 @@ function runOptimization() {
   optimizeError.value = ''
   optimizeStatus.value = 'Running optimization...'
 
-  ;(async () => {
-    try {
-      const payload = getOptimizationPayload()
-      const response = await apiRequest('/predict/hvac/optimize', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
+  try {
+    const payload = getOptimizationPayload()
+    const responseBody = await runOptimizationRequest(payload)
+    const result = responseBody?.result || {}
+    const operation = Array.isArray(result.recommended_operation) ? result.recommended_operation.slice(0, 12) : []
+    const temperatures = Array.isArray(result.temperatures) ? result.temperatures.slice(1, 13) : []
 
-      const responseBody = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        throw new Error(
-          extractApiErrorDetail(
-            responseBody,
-            `Optimization failed: ${response.status}`,
-          ),
-        )
-      }
+    optimizationResult.value = result
+    optimizedControl.value = operation.map(value => Boolean(value))
+    optimizedIndoorForecast.value = temperatures
 
-      const result = responseBody?.result || {}
-      const operation = Array.isArray(result.recommended_operation) ? result.recommended_operation.slice(0, 12) : []
-      const temperatures = Array.isArray(result.temperatures) ? result.temperatures.slice(1, 13) : []
+    chartKey.value += 1
+    optimizeLoading.value = false
+    optimizeStatus.value = 'Optimization completed.'
+    showOptimizeAlert.value = true
 
-      optimizationResult.value = result
-      optimizedControl.value = operation.map(value => Boolean(value))
-      optimizedIndoorForecast.value = temperatures
+    const savings = typeof result.savings_percentage === 'number'
+      ? `${result.savings_percentage.toFixed(1)}% savings`
+      : 'optimization completed'
 
-      if (operation.length > 0) {
-        const nextSchedule = overlayOptimizedScheduleRows(
-          controlStore.schedule,
-          operation,
-          dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts,
-          Number(slider1.value),
-        )
-        applyingOptimizedSchedule.value = true
-        controlStore.setSchedule(nextSchedule)
-        handleScheduleChange(nextSchedule)
-        await syncTopControlsFromSchedule(
-          nextSchedule,
-          dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || new Date().toISOString(),
-        )
-        applyingOptimizedSchedule.value = false
-      }
-
-      chartKey.value += 1
-      optimizeLoading.value = false
-      optimizeStatus.value = 'Optimization completed.'
-      showOptimizeAlert.value = true
-
-      const savings = typeof result.savings_percentage === 'number'
-        ? `${result.savings_percentage.toFixed(1)}% savings`
-        : 'optimization completed'
-
-      alertsStore.addAlert({
-        description: `HVAC optimization completed: ${savings}.`,
-        timestamp: new Date().toISOString()
-      })
-    } catch (error) {
-      applyingOptimizedSchedule.value = false
-      optimizeError.value = error.message || 'Optimization failed.'
-      alertsStore.addAlert({
-        description: `HVAC optimization failed: ${optimizeError.value}`,
-        timestamp: new Date().toISOString()
-      })
-      optimizeLoading.value = false
-      optimizeStatus.value = ''
-    }
-  })()
+    alertsStore.addAlert({
+      description: `HVAC optimization completed: ${savings}.`,
+      timestamp: new Date().toISOString()
+    })
+  } catch (error) {
+    optimizeError.value = error.message || 'Optimization failed.'
+    alertsStore.addAlert({
+      description: `HVAC optimization failed: ${optimizeError.value}`,
+      timestamp: new Date().toISOString()
+    })
+    optimizeLoading.value = false
+    optimizeStatus.value = ''
+  }
 }
 
 
@@ -1019,37 +831,6 @@ const chartLabels = Array.from({ length: totalPoints }, (_, i) => {
 });
 
 // Helper function to generate control schedule data
-function generateControlScheduleData(points, startDate, controlStore) {
-  const control = new Array(points).fill(0);
-  if (!Array.isArray(controlStore.schedule)) {
-    return control;
-  }
-  
-  for (const period of controlStore.schedule) {
-    if (!period.enabled) continue;
-    
-    const [sh, sm] = period.start.split(':').map(Number);
-    const [eh, em] = period.end.split(':').map(Number);
-    let schedStart = new Date(startDate);
-    schedStart.setHours(sh, sm, 0, 0);
-    let schedEnd = new Date(startDate);
-    schedEnd.setHours(eh, em, 0, 0);
-    
-    if (schedEnd <= schedStart) {
-      schedEnd.setDate(schedEnd.getDate() + 1);
-    }
-    
-    for (let i = 0; i < points; i++) {
-      const t = new Date(startDate.getTime() + i * 5 * 60000);
-      if (t >= schedStart && t < schedEnd) {
-        control[i] = 0.5;
-      }
-    }
-  }
-  
-  return control;
-}
-
 function isScheduleActiveAtTimestamp(ts, schedule) {
   const timestamp = new Date(ts)
   if (Number.isNaN(timestamp.getTime()) || !Array.isArray(schedule)) {
@@ -1219,254 +1000,15 @@ function buildDashboardChartData(rows) {
   return { labels, datasets }
 }
 
-function buildFallbackWeatherSeries(points) {
-  const indoor = Array.from({ length: points }, (_, i) =>
-    i < pastPoints ? 23 + 0.01 * i + randn_bm() * 0.15 : null
-  )
-  const outdoor = Array.from({ length: points }, (_, i) =>
-    i < pastPoints ? 22 + 0.008 * i + randn_bm() * 0.18 : null
-  )
-  const lastOutdoor = outdoor[pastPoints - 1] ?? 22
-  const forecast = Array.from({ length: points }, (_, i) =>
-    i >= pastPoints ? lastOutdoor + 0.01 * (i - pastPoints) + randn_bm() * 0.2 : null
-  )
-  const upper = Array.from({ length: points }, (_, i) =>
-    i >= pastPoints ? (forecast[i] ?? 0) + 0.3 : null
-  )
-  const lower = Array.from({ length: points }, (_, i) =>
-    i >= pastPoints ? (forecast[i] ?? 0) - 0.3 : null
-  )
-
-  return { indoor, outdoor, forecast, upper, lower }
-}
-
-function buildFallbackServiceDatasets(indoor, outdoor, forecast, upper, lower) {
-  return {
-    weather: [
-      {
-        label: 'Indoor Temperature (°C)',
-        backgroundColor: 'rgba(21, 101, 192, 0.12)',
-        borderColor: '#1565c0',
-        data: indoor,
-        fill: false,
-        tension: 0.32,
-        borderWidth: 3,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        pointHitRadius: 10,
-        cubicInterpolationMode: 'monotone',
-        yAxisID: 'y'
-      },
-      {
-        label: 'Outdoor Temperature (°C)',
-        backgroundColor: 'rgba(255, 152, 0, 0.12)',
-        borderColor: '#ff8f00',
-        data: outdoor,
-        fill: false,
-        tension: 0.28,
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 3,
-        pointHitRadius: 8,
-        cubicInterpolationMode: 'monotone',
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast (°C)',
-        backgroundColor: 'rgba(255, 179, 0, 0.12)',
-        borderColor: '#ffa000',
-        borderDash: [4, 5],
-        data: forecast,
-        fill: false,
-        tension: 0.28,
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 3,
-        pointHitRadius: 8,
-        cubicInterpolationMode: 'monotone',
-        pointStyle: 'rectRot',
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast Upper Bound',
-        data: upper,
-        borderColor: 'rgba(255, 193, 7, 0.0)',
-        backgroundColor: 'rgba(255, 193, 7, 0.12)',
-        borderWidth: 0,
-        fill: '+1',
-        pointRadius: 0,
-        tension: 0.28,
-        order: 1,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast Lower Bound',
-        data: lower,
-        borderColor: 'rgba(255, 193, 7, 0.0)',
-        backgroundColor: 'rgba(255, 193, 7, 0.12)',
-        borderWidth: 0,
-        fill: false,
-        pointRadius: 0,
-        tension: 0.28,
-        order: 1,
-        yAxisID: 'y'
-      }
-    ],
-    openweather: [
-      {
-        label: 'Indoor Temperature (°C) [Service 1]',
-        backgroundColor: 'rgba(33, 150, 243, 0.15)',
-        borderColor: '#0288d1',
-        data: indoor, // unchanged
-        fill: false,
-        tension: 0.4,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Outdoor Temperature (°C) [Service 1]',
-        backgroundColor: 'rgba(244, 67, 54, 0.15)',
-        borderColor: '#d32f2f',
-        data: outdoor.map(v => v === null ? null : v + 0.5),
-        fill: false,
-        tension: 0.4,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast (°C) [Service 1]',
-        backgroundColor: 'rgba(244, 67, 54, 0.15)',
-        borderColor: '#d32f2f',
-        borderDash: [5, 5],
-        data: forecast.map(v => v === null ? null : v + 0.5),
-        fill: false,
-        tension: 0.4,
-        pointStyle: 'rectRot',
-        yAxisID: 'y'
-      }
-    ],
-    openmeteo: [
-      {
-        label: 'Indoor Temperature (°C) [Service 2]',
-        backgroundColor: 'rgba(156, 39, 176, 0.15)',
-        borderColor: '#7b1fa2',
-        data: indoor, // unchanged
-        fill: false,
-        tension: 0.4,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Outdoor Temperature (°C) [Service 2]',
-        backgroundColor: 'rgba(0, 188, 212, 0.15)',
-        borderColor: '#0097a7',
-        data: outdoor.map(v => v === null ? null : v - 0.5),
-        fill: false,
-        tension: 0.4,
-        yAxisID: 'y'
-      },
-      {
-        label: 'Forecast (°C) [Service 2]',
-        backgroundColor: 'rgba(0, 188, 212, 0.15)',
-        borderColor: '#0097a7',
-        borderDash: [5, 5],
-        data: forecast.map(v => v === null ? null : v - 0.5),
-        fill: false,
-        tension: 0.4,
-        pointStyle: 'rectRot',
-        yAxisID: 'y'
-      }
-    ]
-  }
-}
-
-function collectSelectedServiceDatasets(serviceToDataset) {
-  let datasets = []
-  for (const service of selectedServices.value) {
-    if (serviceToDataset[service]) {
-      datasets = datasets.concat(serviceToDataset[service])
-    }
-  }
-
-  return datasets
-}
-
-function buildFallbackOptimizedDatasets(points, indoor) {
-  if (!hasOptimizedOverlay()) {
-    return []
-  }
-
-  const startIdx = pastPoints
-  const optControlArr = new Array(points).fill(null)
-  const optIndoorArr = new Array(points).fill(null)
-
-  for (let i = 0; i < 12; i++) {
-    optControlArr[startIdx + i] = optimizedControl.value[i] ? 0.5 : 0
-    optIndoorArr[startIdx + i] = (indoor[startIdx + i] ?? 24) * 0.8 + (optimizedIndoorForecast.value[i] ?? 25) * 0.2
-  }
-
-  return [
-    {
-      label: 'Optimized Control',
-      data: optControlArr,
-      type: 'line',
-      borderColor: '#d32f2f',
-      backgroundColor: 'rgba(244,67,54,0.10)',
-      borderWidth: 2,
-      borderDash: [6, 4],
-      stepped: true,
-      fill: false,
-      yAxisID: 'y1',
-      pointRadius: 2,
-      order: 3
-    },
-    {
-      label: 'Optimized Indoor Forecast',
-      data: optIndoorArr,
-      type: 'line',
-      borderColor: '#d32f2f',
-      backgroundColor: 'rgba(244,67,54,0.10)',
-      borderWidth: 2,
-      borderDash: [6, 4],
-      fill: false,
-      yAxisID: 'y',
-      pointRadius: 2,
-      order: 4
-    },
-  ]
-}
-
-function buildFallbackChartData(points) {
-  const { indoor, outdoor, forecast, upper, lower } = buildFallbackWeatherSeries(points)
-  const serviceToDataset = buildFallbackServiceDatasets(indoor, outdoor, forecast, upper, lower)
-  const datasets = collectSelectedServiceDatasets(serviceToDataset)
-
-  datasets.push({
-    label: 'Control Schedule',
-    data: generateControlScheduleData(points, startDate, controlStore),
-    type: 'line',
-    borderColor: '#2e7d32',
-    backgroundColor: 'rgba(46, 125, 50, 0.12)',
-    borderWidth: 2.5,
-    stepped: true,
-    fill: 'origin',
-    yAxisID: 'y1',
-    pointRadius: 0,
-    order: 2
-  })
-
-  datasets.push(...buildFallbackOptimizedDatasets(points, indoor))
-
-  return {
-    labels: chartLabels,
-    datasets
-  }
-}
-
 const chartData = computed(() => {
-  const points = totalPoints
   if (dashboardTimeGridRows.value.length > 0) {
     return buildDashboardChartData(dashboardTimeGridRows.value)
   }
 
-  return buildFallbackChartData(points)
+  return {
+    labels: [],
+    datasets: [],
+  }
 })
 
 const chartOptions = computed(() => {
@@ -1614,14 +1156,14 @@ const indoorTemp = computed(() => {
   if (dashboardTimeGridCurrentRow.value?.temperature != null) {
     return Number(dashboardTimeGridCurrentRow.value.temperature).toFixed(1)
   }
-  const val = lastValidNumber(chartData.value.datasets[0].data);
+  const val = lastValidNumber(chartData.value.datasets[0]?.data || []);
   return typeof val === 'number' ? val.toFixed(1) : '--';
 });
 const outdoorTemp = computed(() => {
   if (dashboardTimeGridCurrentRow.value?.outdoor_temperature != null) {
     return Number(dashboardTimeGridCurrentRow.value.outdoor_temperature).toFixed(1)
   }
-  const val = lastValidNumber(chartData.value.datasets[1].data);
+  const val = lastValidNumber(chartData.value.datasets[1]?.data || []);
   return typeof val === 'number' ? val.toFixed(1) : '--';
 });
 const forecastTemp = computed(() => {
@@ -1629,8 +1171,9 @@ const forecastTemp = computed(() => {
     return Number(optimizationContext.value.outdoor_temperatures[1]).toFixed(1)
   }
   // Find the index of the next hour after the last indoor/outdoor value
-  const nextHourIdx = chartData.value.datasets[0].data.length;
-  const val = chartData.value.datasets[1].data[nextHourIdx] ?? lastValidNumber(chartData.value.datasets[1].data);
+  const nextHourIdx = chartData.value.datasets[0]?.data?.length || 0;
+  const forecastData = chartData.value.datasets[1]?.data || []
+  const val = forecastData[nextHourIdx] ?? lastValidNumber(forecastData);
   return typeof val === 'number' ? val.toFixed(1) : '--';
 });
 

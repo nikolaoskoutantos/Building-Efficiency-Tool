@@ -30,6 +30,7 @@ export const useDashboardStore = defineStore('dashboard', {
       currentRow: null,
       referenceTime: null,
       optimizationContext: null,
+      latestOptimizationResult: null,
       loading: false,
       error: null,
       loadedBuildingId: null,
@@ -190,6 +191,7 @@ export const useDashboardStore = defineStore('dashboard', {
         currentRow: payload?.current_row || null,
         referenceTime: payload?.reference_time || null,
         optimizationContext: payload?.optimization_context || null,
+        latestOptimizationResult: payload?.latest_optimization_result || null,
         error: null,
         loadedBuildingId: buildingId ?? null,
         lastLoaded: new Date().toISOString()
@@ -202,6 +204,7 @@ export const useDashboardStore = defineStore('dashboard', {
         currentRow: null,
         referenceTime: null,
         optimizationContext: null,
+        latestOptimizationResult: null,
         loading: false,
         error: null,
         loadedBuildingId: null,
@@ -225,7 +228,8 @@ export const useDashboardStore = defineStore('dashboard', {
           rows: this.efficiencyTimeGrid.rows,
           current_row: this.efficiencyTimeGrid.currentRow,
           reference_time: this.efficiencyTimeGrid.referenceTime,
-          optimization_context: this.efficiencyTimeGrid.optimizationContext
+          optimization_context: this.efficiencyTimeGrid.optimizationContext,
+          latest_optimization_result: this.efficiencyTimeGrid.latestOptimizationResult
         }
       }
 

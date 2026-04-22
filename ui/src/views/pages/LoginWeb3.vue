@@ -13,21 +13,20 @@
         <h2 class="mb-4 text-center">Welcome Back</h2>
         <p class="text-center text-muted mb-4">Sign in using your wallet (Reown AppKit)</p>
 
-        <!-- Show signing status -->
-        <div v-if="isSigningMessage" class="text-center mb-3">
+        <div v-if="statusMessage" class="text-center mb-3">
           <output class="spinner-border spinner-border-sm me-2">
             <span class="visually-hidden">Loading...</span>
           </output>
-          <span class="text-primary">Please sign the message in your wallet...</span>
+          <span class="text-primary">{{ statusMessage }}</span>
         </div>
 
-        <CButton 
-          color="primary" 
-          class="w-100 mb-3" 
+        <CButton
+          color="primary"
+          class="w-100 mb-3"
           @click="connectWallet"
-          :disabled="isSigningMessage"
+          :disabled="isBusy"
         >
-          {{ isSigningMessage ? 'Signing Message...' : 'Connect Wallet' }}
+          {{ buttonLabel }}
         </CButton>
         <CButton color="secondary" class="w-100" @click="logout">Register</CButton>
 
@@ -40,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import { useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect } from '@reown/appkit/vue'
@@ -55,47 +54,95 @@ type Eip1193Provider = {
 const { open } = useAppKit()
 const { disconnect } = useDisconnect()
 const accountData = useAppKitAccount()
-const { walletProvider } = useAppKitProvider<Eip1193Provider>('eip155')
+const appKitProviderState = useAppKitProvider<Eip1193Provider>('eip155')
 const router = useRouter()
 const auth = useAuthStore()
 
-// Loading state for message signing
+const isConnecting = ref(false)
 const isSigningMessage = ref(false)
 const lastProcessedAddress = ref<string | null>(null)
-const activeEthereumProvider = computed<Eip1193Provider | null>(() => {
-  if (walletProvider?.value) {
-    return walletProvider.value
+
+function extractWalletProvider(value: unknown): Eip1193Provider | null {
+  if (!value || typeof value !== 'object') {
+    return null
   }
 
-  const globalEthereum = (globalThis as typeof globalThis & { ethereum?: Eip1193Provider }).ethereum
-  return globalEthereum ?? null
-})
+  if ('request' in value && typeof value.request === 'function') {
+    return value as Eip1193Provider
+  }
 
-async function connectWallet() {
-  try {
-    console.log('🔗 Starting wallet connection...')
-    
-    // Reset any previous auth state to ensure clean login
-    if (auth.isAuthenticated) {
-      console.log('⚠️ User already authenticated, clearing state for fresh login...')
-      auth.isAuthenticated = false
-      auth.userProfile = null
-      auth.clearJwtToken()
+  if ('value' in value) {
+    const nestedValue = (value as { value?: unknown }).value
+
+    if (nestedValue && typeof nestedValue === 'object' && 'request' in nestedValue && typeof nestedValue.request === 'function') {
+      return nestedValue as Eip1193Provider
     }
-
-    lastProcessedAddress.value = null
-    await open()
-  } catch (err) {
-    console.error('❌ Wallet connection failed:', err)
   }
+
+  return null
 }
 
-// Generate a unique nonce for message signing
+const activeWalletProvider = computed<Eip1193Provider | null>(() =>
+  extractWalletProvider(appKitProviderState?.walletProvider),
+)
+const isVerifying = computed(() => auth.isVerifying)
+const isBusy = computed(() => isConnecting.value || isSigningMessage.value || isVerifying.value)
+const statusMessage = computed(() => {
+  if (isConnecting.value) {
+    return 'Waiting for wallet connection...'
+  }
+
+  if (isSigningMessage.value) {
+    return 'Please sign the message in your wallet...'
+  }
+
+  if (isVerifying.value) {
+    return 'Verifying wallet signature...'
+  }
+
+  return ''
+})
+const buttonLabel = computed(() => {
+  if (isConnecting.value) {
+    return 'Connecting Wallet...'
+  }
+
+  if (isSigningMessage.value) {
+    return 'Signing Message...'
+  }
+
+  if (isVerifying.value) {
+    return 'Verifying Login...'
+  }
+
+  return 'Connect Wallet'
+})
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function waitForWalletReady(timeoutMs = 12000, stepMs = 250) {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const address = accountData.value.address ?? null
+    const provider = activeWalletProvider.value
+
+    if (address && provider) {
+      return { address, provider }
+    }
+
+    await sleep(stepMs)
+  }
+
+  throw new Error('Wallet connection timed out before AppKit returned both address and provider')
+}
+
 function generateNonce() {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
 }
 
-// Create the message to be signed
 function createSignMessage(address: string, nonce: string) {
   const timestamp = new Date().toISOString()
   return `Welcome to QoE Application!
@@ -109,77 +156,10 @@ Nonce: ${nonce}
 Issued at: ${timestamp}`
 }
 
-// Sign message with wallet
-async function signMessage(address: string) {
-  try {
-    isSigningMessage.value = true
-
-    const providerSource = activeEthereumProvider.value
-    if (!providerSource) {
-      throw new Error('No wallet provider found from AppKit or browser wallet')
-    }
-
-    const provider = new ethers.providers.Web3Provider(providerSource)
-    const signer = provider.getSigner()
-
-    // Generate nonce and message
-    const nonce = generateNonce()
-    const message = createSignMessage(address, nonce)
-    
-    console.log('📝 Signing message:', message)
-    
-    // Sign the message
-    const signature = await signer.signMessage(message)
-    
-    console.log('✅ Message signed successfully!')
-    
-    return {
-      message,
-      signature,
-      nonce,
-      address
-    }
-  } catch (error) {
-    console.error('❌ Message signing failed:', error)
-    throw error
-  } finally {
-    isSigningMessage.value = false
-  }
-}
-
-async function logout() {
-  await disconnect()
-  auth.setWalletData({
-    address: null,
-    chainId: null,
-    walletType: null,
-    balance: null,
-    ensName: null,
-    avatar: null,
-  })
-  router.push('/')
-}
-
-function canStartWalletAuthentication(address?: string | null, provider?: Eip1193Provider | null) {
-  if (!address || !provider) {
-    return false
-  }
-
-  if (isSigningMessage.value || auth.isVerifying) {
-    return false
-  }
-
-  if (lastProcessedAddress.value === address && auth.isAuthenticated) {
-    return false
-  }
-
-  return true
-}
-
 function setBasicWalletData(address: string) {
   auth.setWalletData({
     address,
-    chainId: null, // Will be set by the provider
+    chainId: null,
     walletType: 'web3',
     balance: null,
     ensName: null,
@@ -187,38 +167,54 @@ function setBasicWalletData(address: string) {
   })
 }
 
+async function signMessage(address: string, providerSource: Eip1193Provider) {
+  try {
+    isSigningMessage.value = true
+
+    const provider = new ethers.providers.Web3Provider(providerSource)
+    const signer = provider.getSigner()
+    const nonce = generateNonce()
+    const message = createSignMessage(address, nonce)
+    const signature = await signer.signMessage(message)
+
+    return {
+      address,
+      nonce,
+      message,
+      signature,
+    }
+  } finally {
+    isSigningMessage.value = false
+  }
+}
+
 async function ensureAuthenticatedBeforeRedirect() {
   if (!auth.isAuthenticated) {
-    console.warn('⚠️ Auth state not set properly, waiting longer...')
-    await new Promise(resolve => setTimeout(resolve, 200))
+    await sleep(200)
   }
 }
 
 async function finalizeSuccessfulLogin(address: string, shouldRedirect: boolean) {
-  if (shouldRedirect) {
-    console.log('✅ Redirecting to dashboard...')
-  } else {
-    console.log('✅ Login successful but no redirect flag')
-  }
-
   await ensureAuthenticatedBeforeRedirect()
   lastProcessedAddress.value = address
+
+  if (shouldRedirect) {
+    await router.replace('/efficiencytool')
+    return
+  }
+
   await router.replace('/efficiencytool')
 }
 
-async function authenticateWalletAddress(address: string) {
+async function authenticateWalletAddress(address: string, providerSource: Eip1193Provider) {
+  if (lastProcessedAddress.value === address && auth.isAuthenticated) {
+    return
+  }
+
   setBasicWalletData(address)
 
-  const authData = await signMessage(address)
-
-  console.log('🔐 About to call setSignedMessage...')
-  auth.debugAuthState()
-
+  const authData = await signMessage(address, providerSource)
   const result = await auth.setSignedMessage(authData)
-
-  console.log('🎯 Login result:', result)
-  console.log('🔍 Auth state after setSignedMessage:')
-  auth.debugAuthState()
 
   if (!result.success) {
     throw new Error(result.error || 'Authentication failed')
@@ -227,29 +223,72 @@ async function authenticateWalletAddress(address: string) {
   await finalizeSuccessfulLogin(address, result.shouldRedirect)
 }
 
-watch(
-  () => [accountData.value.address, activeEthereumProvider.value] as const,
-  async ([address, provider]) => {
-    if (!canStartWalletAuthentication(address, provider)) {
-      return
-    }
+function clearFreshLoginState() {
+  auth.isAuthenticated = false
+  auth.isVerifying = false
+  auth.userProfile = null
+  auth.walletAddress = null
+  auth.chainId = null
+  auth.walletType = null
+  auth.balance = null
+  auth.ensName = null
+  auth.avatar = null
+  auth.connected = false
+  auth.signedMessage = null
+  auth.signature = null
+  auth.nonce = null
+  auth.clearJwtToken()
+  lastProcessedAddress.value = null
+}
 
-    const walletAddress = address
-    if (!walletAddress) {
-      return
-    }
+async function cleanupFailedAuthentication() {
+  lastProcessedAddress.value = null
+  clearFreshLoginState()
 
-    try {
-      await authenticateWalletAddress(walletAddress)
-    } catch (error) {
-      console.error('❌ Authentication failed:', error)
+  try {
+    await disconnect()
+  } catch (error) {
+    console.warn('Wallet disconnect after failed authentication did not complete cleanly:', error)
+  }
+}
+
+async function connectWallet() {
+  if (isBusy.value) {
+    return
+  }
+
+  isConnecting.value = true
+
+  try {
+    if (auth.isAuthenticated) {
+      clearFreshLoginState()
+    } else {
       lastProcessedAddress.value = null
-      // If signing fails, disconnect wallet
-      await disconnect()
     }
-  },
-  { immediate: true }
-)
+
+    await open()
+
+    const { address, provider } = await waitForWalletReady()
+    await authenticateWalletAddress(address, provider)
+  } catch (error) {
+    console.error('Wallet authentication failed:', error)
+    await cleanupFailedAuthentication()
+  } finally {
+    isConnecting.value = false
+  }
+}
+
+async function logout() {
+  clearFreshLoginState()
+
+  try {
+    await disconnect()
+  } catch (error) {
+    console.warn('Wallet disconnect during logout did not complete cleanly:', error)
+  }
+
+  await router.push('/')
+}
 </script>
 
 <style scoped>
@@ -303,5 +342,4 @@ watch(
     margin-bottom: auto; /* ⬅️ centers content vertically */
   }
 }
-
 </style>

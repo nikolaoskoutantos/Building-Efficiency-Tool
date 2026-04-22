@@ -108,13 +108,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve Vue.js static files (production build) if available
-vue_dist_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../ui/dist'))
-if os.path.isdir(vue_dist_path):
-    app.mount("/", StaticFiles(directory=vue_dist_path, html=True), name="static")
-
-
-
 def env_flag(name: str, default: bool = False) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -180,3 +173,9 @@ app.include_router(buildings_router)
 app.include_router(user_settings_router)
 app.include_router(mqtt_router)
 app.include_router(dashboard_router)
+
+# Serve Vue.js static files (production build) if available.
+# Keep this last so the catch-all "/" static mount does not shadow API or WebSocket routes.
+vue_dist_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../ui/dist'))
+if os.path.isdir(vue_dist_path):
+    app.mount("/", StaticFiles(directory=vue_dist_path, html=True), name="static")

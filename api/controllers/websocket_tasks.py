@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from db import SessionLocal
 from services.websocket_tasks import TaskExecutionContext, TaskNotRegisteredError, resolve_task_handler
@@ -161,12 +162,12 @@ async def run_registered_task(session: WebSocketTaskSession, task_id: str, auth_
         )
         raise
 
-    registered_user_id = resolve_registered_user_id_from_auth(auth_payload)
+    registered_user_id = await run_in_threadpool(resolve_registered_user_id_from_auth, auth_payload)
     context = TaskExecutionContext(
         task_id=task_id,
         auth_payload=auth_payload,
         registered_user_id=registered_user_id,
-        require_building_access=build_building_access_guard(auth_payload),
+        require_building_access=build_building_access_guard(registered_user_id),
         send_progress=session.send_json_message,
         send_alert=session.send_json_message,
         send_result=session.send_json_message,
@@ -200,9 +201,7 @@ def resolve_registered_user_id_from_auth(auth_payload: dict) -> int:
         db.close()
 
 
-def build_building_access_guard(auth_payload: dict):
-    user_id = resolve_registered_user_id_from_auth(auth_payload)
-
+def build_building_access_guard(user_id: int):
     def _guard(building_id: int) -> int:
         db: Session = SessionLocal()
         try:

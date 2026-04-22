@@ -1,13 +1,23 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import Annotated
+from sqlalchemy.orm import Session
 from db import SessionLocal
 from models.hvac_unit import HVACUnit
-from models.sensor import Sensor  # <-- adjust import path to your project
+from models.sensor import Sensor
 import logging
 
 router = APIRouter(tags=["Device & User Authentication"])
 logger = logging.getLogger("uvicorn.error")
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 class EMQXACLRequest(BaseModel):
     username: str
@@ -89,12 +99,11 @@ def check_sensor_ownership(db, parts, hvac_unit_id):
 
 
 @router.post("/device/acl")
-async def device_acl(body: EMQXACLRequest):
+def device_acl(body: EMQXACLRequest, db: Annotated[Session, Depends(get_db)]):
     username = (body.username or "").strip()
     action   = (body.action or "").strip().lower()
     topic    = (body.topic or "").strip().lstrip("/")
 
-    db = SessionLocal()
     try:
         logger.info(f"ACL HIT username={username!r} action={action!r} topic={topic!r}")
         device = db.query(HVACUnit).filter(HVACUnit.device_key == username).first()
@@ -125,5 +134,3 @@ async def device_acl(body: EMQXACLRequest):
     except Exception:
         logger.exception("ACL error")
         return JSONResponse({"result": "deny"})
-    finally:
-        db.close()

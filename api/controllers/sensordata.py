@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
-from typing import Annotated
+from typing import Annotated, Any, Dict
 import jwt
 from models.sensor import Sensor
 from models.hvac_unit import HVACUnit
@@ -7,7 +7,7 @@ import os
 from datetime import timezone
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models.sensordata import SensorData
+from models.sensordata import SensorData, SensorDataRaw
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
@@ -15,6 +15,8 @@ from utils.auth_dependencies import get_current_user_role, resolve_registered_us
 from utils.policies import has_permission
 
 router = APIRouter(prefix="/sensordata", tags=["SensorData"])
+
+MAX_BULK_RECORDS = int(os.environ.get("SENSOR_BULK_MAX_RECORDS", "1000"))
 
 # Pydantic schemas
 class SensorDataBase(BaseModel):
@@ -29,6 +31,54 @@ class SensorDataRead(SensorDataBase):
     id: int
     class Config:
         from_attributes = True
+
+class SensorDataRawBase(BaseModel):
+    sensor_id: int
+    timestamp: Optional[datetime] = None
+    value: Optional[float] = None
+    measurement_type: str = "temperature"
+    unit: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+
+class SensorDataRawCreate(SensorDataRawBase):
+    pass
+
+class SensorDataRawRead(SensorDataRawBase):
+    id: int
+    class Config:
+        from_attributes = True
+
+def sensor_data_payload(data: SensorDataCreate):
+    return data.dict(exclude_none=True)
+
+def sensor_data_raw_payload(data: SensorDataRawCreate):
+    return data.dict(exclude_none=True)
+
+def validate_device_sensor_ids(
+    db: Session,
+    sensor_ids: List[int],
+    device_id: int
+):
+    unique_sensor_ids = list(set(sensor_ids))
+    sensors = db.query(Sensor).filter(Sensor.id.in_(unique_sensor_ids)).all()
+    authorized_sensor_ids = {
+        sensor.id
+        for sensor in sensors
+        if sensor.hvac_unit_id == device_id
+    }
+    unauthorized_sensor_ids = [
+        sensor_id
+        for sensor_id in unique_sensor_ids
+        if sensor_id not in authorized_sensor_ids
+    ]
+    if unauthorized_sensor_ids:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Device not authorized to write to one or more sensors",
+                "sensor_ids": unauthorized_sensor_ids
+            }
+        )
 
 def get_db():
     db = SessionLocal()
@@ -69,7 +119,7 @@ def get_device_identity(
 
 @router.post(
     "/",
-    response_model=SensorDataRead,
+    response_model=SensorDataRawRead,
     responses={
         404: {"description": "SensorData or Sensor not found"},
         401: {"description": "Unauthorized: Missing/invalid/expired device token"},
@@ -78,19 +128,55 @@ def get_device_identity(
     },
 )
 def create_sensor_data(
-    data: SensorDataCreate,
+    data: SensorDataRawCreate,
     db: Annotated[Session, Depends(get_db)],
     device_jwt: Annotated[dict, Depends(get_device_identity)]
 ):
-    # Validate that the sensor belongs to the device
-    sensor = db.query(Sensor).filter(Sensor.id == data.sensor_id).first()
-    if not sensor or sensor.hvac_unit_id != int(device_jwt["sub"]):
-        raise HTTPException(status_code=403, detail="Device not authorized to write to this sensor")
-    db_data = SensorData(**data.dict())
+    validate_device_sensor_ids(db, [data.sensor_id], int(device_jwt["sub"]))
+    db_data = SensorDataRaw(**sensor_data_raw_payload(data))
     db.add(db_data)
     db.commit()
     db.refresh(db_data)
     return db_data
+
+@router.post(
+    "/bulk",
+    response_model=List[SensorDataRawRead],
+    responses={
+        400: {"description": "Empty payload"},
+        401: {"description": "Unauthorized: Missing/invalid/expired device token"},
+        403: {"description": "Forbidden: Device not authorized to write to one or more sensors, or device revoked"},
+        500: {"description": "Internal server error"}
+    },
+)
+def create_sensor_data_bulk(
+    data: List[SensorDataRawCreate],
+    db: Annotated[Session, Depends(get_db)],
+    device_jwt: Annotated[dict, Depends(get_device_identity)]
+):
+    if not data:
+        raise HTTPException(status_code=400, detail="Bulk sensor data payload cannot be empty")
+    if len(data) > MAX_BULK_RECORDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bulk payload exceeds maximum of {MAX_BULK_RECORDS} records per request."
+        )
+
+    validate_device_sensor_ids(
+        db,
+        [item.sensor_id for item in data],
+        int(device_jwt["sub"])
+    )
+
+    db_rows = [
+        SensorDataRaw(**sensor_data_raw_payload(item))
+        for item in data
+    ]
+    db.add_all(db_rows)
+    db.commit()
+    for row in db_rows:
+        db.refresh(row)
+    return db_rows
 
 @router.get("/", response_model=List[SensorDataRead])
 def read_sensor_data(

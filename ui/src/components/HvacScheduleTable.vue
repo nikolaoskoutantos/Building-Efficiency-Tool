@@ -19,6 +19,9 @@
       <div v-if="props.scheduleSaving" class="schedule-status-text mb-2">
         Saving schedule changes...
       </div>
+      <div v-else-if="props.scheduleSaveMessage" class="schedule-status-text schedule-status-text--success mb-2">
+        {{ props.scheduleSaveMessage }}
+      </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle mb-0">
           <thead>
@@ -96,6 +99,10 @@ const props = defineProps({
   scheduleSaving: {
     type: Boolean,
     default: false,
+  },
+  scheduleSaveMessage: {
+    type: String,
+    default: '',
   },
 })
 
@@ -335,6 +342,10 @@ function handleEnabledChange(idx, value) {
   font-weight: 600;
 }
 
+.schedule-status-text--success {
+  color: #1f6f3d;
+}
+
 .hvac-schedule-table .table {
   min-width: 350px;
 }
@@ -387,6 +398,10 @@ function handleEnabledChange(idx, value) {
 
 :global([data-coreui-theme='dark']) .hvac-schedule-table .schedule-status-text {
   color: #94a3b8;
+}
+
+:global([data-coreui-theme='dark']) .hvac-schedule-table .schedule-status-text--success {
+  color: #86efac;
 }
 
 :global([data-coreui-theme='dark']) .hvac-schedule-table .table th {

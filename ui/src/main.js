@@ -19,13 +19,16 @@ import DocsIcons from '@/components/DocsIcons'
 // ✅ Reown AppKit Setup
 createAppKit({
   adapters: [new Ethers5Adapter()],
-  networks: [mainnet, arbitrum, base, baseSepolia], // ✅ add baseSepolia here
+  networks: [mainnet, arbitrum, base, baseSepolia],
   projectId: '734b9e874694e044fa1e63fba83e0aa0',
   metadata: {
     name: 'Auth',
     description: 'AppKit Example',
-    url: 'https://reown.com/appkit',
+    url: 'https://benet.nkoutantos.com',
     icons: ['https://assets.reown.com/reown-profile-pic.png'],
+    redirect: {
+      universal: 'https://benet.nkoutantos.com'
+    }
   },
   features: { analytics: true },
 })

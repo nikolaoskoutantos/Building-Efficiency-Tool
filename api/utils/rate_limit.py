@@ -23,8 +23,14 @@ class RateLimiter:
             return True
 
 rate_limiter = RateLimiter(max_requests=5, window_seconds=60)  # 5 requests per minute per IP
+ml_rate_limiter = RateLimiter(max_requests=10, window_seconds=300)  # 10 requests per 5 min per IP
 
 def rate_limit_dependency(request: Request):
     ip = request.client.host
     if not rate_limiter.is_allowed(ip):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+
+def ml_rate_limit_dependency(request: Request):
+    ip = request.client.host
+    if not ml_rate_limiter.is_allowed(ip):
+        raise HTTPException(status_code=429, detail="Too many ML requests. Please try again in a few minutes.")

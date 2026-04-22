@@ -49,6 +49,96 @@ TESTER_CONFIGS = [
         "room": "301",
         "zone": "C",
         "central_unit": "CU3",
+        "extra_devices": [
+            {
+                "room": "Postaz di Lavoro 26-27",
+                "zone": "StA",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "temperature", "unit": "celsius", "payload_path": "0/0/7", "label": "Temp Att StA Postaz di Lavoro 26-27"},
+                    {"type": "humidity", "unit": "%", "payload_path": "0/0/8", "label": "Umr Att StA Postaz di Lavoro 26-27"},
+                ],
+            },
+            {
+                "room": "Locale 29-30",
+                "zone": "StB",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "temperature", "unit": "celsius", "payload_path": "0/0/9", "label": "Temp Att StB Locale 29-30"},
+                    {"type": "humidity", "unit": "%", "payload_path": "0/0/10", "label": "Umr Att StB Locale 29-30"},
+                ],
+            },
+            {
+                "room": "Postaz di Lavoro 24-25",
+                "zone": "StC",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "temperature", "unit": "celsius", "payload_path": "0/0/11", "label": "Temp Att StC Postaz di Lavoro 24-25"},
+                    {"type": "humidity", "unit": "%", "payload_path": "0/0/12", "label": "Umr Att StC Postaz di Lavoro 24-25"},
+                    {"type": "power", "unit": "W", "payload_path": "0/0/13", "label": "W-Postaz di Lavoro 24-25"},
+                    {"type": "current", "unit": "A", "payload_path": "0/0/14", "label": "A-Postaz di Lavoro 24-25"},
+                    {"type": "voltage", "unit": "V", "payload_path": "0/0/15", "label": "V-Postaz di Lavoro 24-25"},
+                ],
+            },
+            {
+                "room": "Postaz di Lavoro 26-29",
+                "zone": "Workstations",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "power", "unit": "W", "payload_path": "0/0/16", "label": "W-Postaz di Lavoro 26-29"},
+                    {"type": "current", "unit": "A", "payload_path": "0/0/17", "label": "A-Postaz di Lavoro 26-29"},
+                    {"type": "voltage", "unit": "V", "payload_path": "0/0/18", "label": "V-Postaz di Lavoro 26-29"},
+                ],
+            },
+            {
+                "room": "CDZ",
+                "zone": "HVAC",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "power", "unit": "W", "payload_path": "0/0/19", "label": "W-CDZ"},
+                    {"type": "current", "unit": "A", "payload_path": "0/0/20", "label": "A-CDZ"},
+                    {"type": "voltage", "unit": "V", "payload_path": "0/0/21", "label": "V-CDZ"},
+                ],
+            },
+            {
+                "room": "Illum Locale 24-25",
+                "zone": "Lighting",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "power", "unit": "W", "payload_path": "0/0/22", "label": "W-Illum Locale 24-25"},
+                    {"type": "current", "unit": "A", "payload_path": "0/0/23", "label": "A-Illum Locale 24-25"},
+                    {"type": "voltage", "unit": "V", "payload_path": "0/0/24", "label": "V-Illum Locale 24-25"},
+                ],
+            },
+            {
+                "room": "Illum Locale 26-27",
+                "zone": "Lighting",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "power", "unit": "W", "payload_path": "0/0/25", "label": "W-Illum Locale 26-27"},
+                    {"type": "current", "unit": "A", "payload_path": "0/0/26", "label": "A-Illum Locale 26-27"},
+                    {"type": "voltage", "unit": "V", "payload_path": "0/0/27", "label": "V-Illum Locale 26-27"},
+                ],
+            },
+            {
+                "room": "Illum Locale 29-30",
+                "zone": "Lighting",
+                "central_unit": "Florence KNX",
+                "seed_timeseries": False,
+                "sensors": [
+                    {"type": "power", "unit": "W", "payload_path": "0/0/28", "label": "W-Illum Locale 29-30"},
+                    {"type": "current", "unit": "A", "payload_path": "0/0/29", "label": "A-Illum Locale 29-30"},
+                    {"type": "voltage", "unit": "V", "payload_path": "0/0/30", "label": "V-Illum Locale 29-30"},
+                ],
+            },
+        ],
     },
     {
         "wallet_address": "0xE8375C8E6eB3c48Dfafb1f573651a6b12aAa273C",
@@ -310,15 +400,23 @@ def get_or_create_hvac_unit(db, building, config, HVACUnit):
     return hvac_unit
 
 
-def get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sensor):
-    sensor = db.query(Sensor).filter_by(
-        building_id=building.id,
-        hvac_unit_id=hvac_unit.id,
-        type=sensor_type,
-        room=config["room"],
-        zone=config["zone"],
-        central_unit=config["central_unit"],
-    ).first()
+def get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sensor, payload_path=None):
+    if payload_path:
+        sensor = db.query(Sensor).filter_by(
+            building_id=building.id,
+            hvac_unit_id=hvac_unit.id,
+            payload_path=payload_path,
+        ).first()
+    else:
+        sensor = db.query(Sensor).filter_by(
+            building_id=building.id,
+            hvac_unit_id=hvac_unit.id,
+            type=sensor_type,
+            room=config["room"],
+            zone=config["zone"],
+            central_unit=config["central_unit"],
+        ).first()
+
     if not sensor:
         sensor = Sensor(
             building_id=building.id,
@@ -331,12 +429,49 @@ def get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sen
             room=config["room"],
             zone=config["zone"],
             central_unit=config["central_unit"],
+            payload_path=payload_path,
         )
         db.add(sensor)
         db.commit()
         db.refresh(sensor)
         print(f"📟 Created sensor {sensor_type} id={sensor.id} for {building.name}")
+    else:
+        updated = False
+        for field, value in (
+            ("type", sensor_type),
+            ("unit", unit),
+            ("room", config["room"]),
+            ("zone", config["zone"]),
+            ("central_unit", config["central_unit"]),
+            ("payload_path", payload_path),
+            ("lat", float(building.lat)),
+            ("lon", float(building.lon)),
+        ):
+            if getattr(sensor, field) != value:
+                setattr(sensor, field, value)
+                updated = True
+        if updated:
+            db.commit()
     return sensor
+
+
+def build_default_device_config(config):
+    return {
+        "room": config["room"],
+        "zone": config["zone"],
+        "central_unit": config["central_unit"],
+        "seed_timeseries": True,
+        "sensors": [
+            {"type": sensor_type, "unit": unit}
+            for sensor_type, unit in SENSOR_DEFINITIONS
+        ],
+    }
+
+
+def iter_config_devices(config):
+    yield build_default_device_config(config)
+    for device_config in config.get("extra_devices", []):
+        yield device_config
 
 
 def get_or_create_mock_services(db, Service):
@@ -503,29 +638,41 @@ def insert_mock_data():
             building = get_or_create_building(db, config, Building)
             user = get_or_create_user(db, config, User)
             ensure_user_building_mapping(db, user, building, config["role"], UserBuilding)
-            hvac_unit = get_or_create_hvac_unit(db, building, config, HVACUnit)
-            sensors = {
-                sensor_type: get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sensor)
-                for sensor_type, unit in SENSOR_DEFINITIONS
-            }
 
-            print(f"🧹 Refreshing weather/sensor/schedule data for {building.name}")
-            steps, weather_count, schedule_count, sensor_count = seed_building_timeseries(
-                db,
-                building,
-                hvac_unit,
-                sensors,
-                user.id,
-                start,
-                end,
-                WeatherData,
-                SensorData,
-                HVACScheduleInterval,
-            )
-            total_steps += steps
-            total_weather += weather_count
-            total_schedules += schedule_count
-            total_sensor_rows += sensor_count
+            for device_config in iter_config_devices(config):
+                hvac_unit = get_or_create_hvac_unit(db, building, device_config, HVACUnit)
+                sensors = {}
+                for sensor_config in device_config["sensors"]:
+                    sensor_type = sensor_config["type"]
+                    sensors[sensor_config.get("key", sensor_type)] = get_or_create_sensor(
+                        db,
+                        building,
+                        hvac_unit,
+                        device_config,
+                        sensor_type,
+                        sensor_config["unit"],
+                        Sensor,
+                        payload_path=sensor_config.get("payload_path"),
+                    )
+
+                if device_config.get("seed_timeseries", False):
+                    print(f"🧹 Refreshing weather/sensor/schedule data for {building.name}")
+                    steps, weather_count, schedule_count, sensor_count = seed_building_timeseries(
+                        db,
+                        building,
+                        hvac_unit,
+                        sensors,
+                        user.id,
+                        start,
+                        end,
+                        WeatherData,
+                        SensorData,
+                        HVACScheduleInterval,
+                    )
+                    total_steps += steps
+                    total_weather += weather_count
+                    total_schedules += schedule_count
+                    total_sensor_rows += sensor_count
 
             if config["building_name"] == "Pilot1":
                 primary_building = building

@@ -26,7 +26,7 @@
 <script setup>
 import { computed } from 'vue'
 import { CChartBar } from '@coreui/vue-chartjs'
-import { useColorModes } from '@coreui/vue'
+import { useThemeStore } from '@/stores/theme.js'
 
 const props = defineProps({
   optimizationSummary: {
@@ -35,8 +35,8 @@ const props = defineProps({
   },
 })
 
-const { colorMode } = useColorModes('coreui-free-vue-admin-template-theme')
-const isDarkTheme = computed(() => colorMode.value === 'dark')
+const themeStore = useThemeStore()
+const isDarkTheme = computed(() => themeStore.theme === 'dark')
 
 const mainData = Array.from({ length: 30 }, () => Math.floor(Math.random() * 10) + 10)
 const efficiencyData = Array.from({ length: 30 }, (_, i) => ([4, 9, 14, 19, 24].includes(i) ? Math.floor(mainData[i] * 0.3) : 0))

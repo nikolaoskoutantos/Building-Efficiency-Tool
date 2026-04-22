@@ -239,7 +239,10 @@ services:
 
 
   db:
-    image: postgres:15
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    image: qoe-postgres-pg-cron:15
     container_name: qoe-db
     restart: unless-stopped
     env_file:

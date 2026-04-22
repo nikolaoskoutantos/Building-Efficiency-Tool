@@ -13,7 +13,6 @@ from eth_account import Account
 import hashlib
 import logging
 from utils.rate_limit import rate_limit_dependency
-from db.connection import SessionLocal
 from models.hvac_models import User, UserBuilding, Building
 from db.connection import get_db
 from models.hvac_unit import HVACUnit
@@ -139,13 +138,6 @@ def normalize_wallet_address(wallet_address: Optional[str]) -> Optional[str]:
         return wallet_address
     return wallet_address.strip().lower()
 
-
-def get_db():
-    db_session = SessionLocal()
-    try:
-        yield db_session
-    finally:
-        db_session.close()
 
 DbSession = Annotated[Session, Depends(get_db)]
 

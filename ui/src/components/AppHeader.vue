@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import { useSidebarStore } from '@/stores/sidebar.js'
 import { useAlertsStore } from '@/stores/alerts.js'
+import { useThemeStore } from '@/stores/theme.js'
 import Alerts from '@/components/Alerts.vue'
 
 import AppBreadcrumb from '@/components/AppBreadcrumb.vue'
@@ -14,7 +15,13 @@ import AppHeaderDropdownAccnt from '@/components/AppHeaderDropdownAccnt.vue'
 
 const headerClassNames = ref('mb-4 p-0')
 const { colorMode, setColorMode } = useColorModes('coreui-free-vue-admin-template-theme')
+const themeStore = useThemeStore()
 const sidebar = useSidebarStore()
+
+function changeColorMode(mode) {
+  setColorMode(mode)
+  themeStore.toggleTheme(mode)
+}
 const auth = useAuthStore()
 const alertsStore = useAlertsStore()
 const router = useRouter()
@@ -148,7 +155,7 @@ function navigateToSettings(event) {
               class="d-flex align-items-center"
               component="button"
               type="button"
-              @click="setColorMode('light')"
+              @click="changeColorMode('light')"
             >
               <CIcon class="me-2" icon="cil-sun" size="lg" /> Light
             </CDropdownItem>
@@ -157,7 +164,7 @@ function navigateToSettings(event) {
               class="d-flex align-items-center"
               component="button"
               type="button"
-              @click="setColorMode('dark')"
+              @click="changeColorMode('dark')"
             >
               <CIcon class="me-2" icon="cil-moon" size="lg" /> Dark
             </CDropdownItem>
@@ -166,7 +173,7 @@ function navigateToSettings(event) {
               class="d-flex align-items-center"
               component="button"
               type="button"
-              @click="setColorMode('auto')"
+              @click="changeColorMode('auto')"
             >
               <CIcon class="me-2" icon="cil-contrast" size="lg" /> Auto
             </CDropdownItem>
@@ -216,7 +223,7 @@ function navigateToSettings(event) {
   height: 42px;
   border-radius: 14px;
   color: #22324d;
-  background: rgba(39, 122, 226, 0.08);
+  background: #eaf3ff;
 }
 
 .app-header-shell__nav :deep(.nav-link),
@@ -232,7 +239,7 @@ function navigateToSettings(event) {
 .app-header-shell__nav :deep(.nav-link:hover),
 .app-header-shell__actions :deep(.nav-link:hover),
 .app-header-shell__utility :deep(.dropdown-toggle:hover) {
-  background: rgba(39, 122, 226, 0.08);
+  background: #eaf3ff;
   color: #1f4d8f;
   box-shadow: 0 8px 20px rgba(104, 130, 170, 0.08);
 }
@@ -307,7 +314,7 @@ function navigateToSettings(event) {
 
 .app-header-shell--dark .app-header-shell__toggler {
   color: #dbe7fb;
-  background: rgba(59, 130, 246, 0.16);
+  background: #223a5a;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
@@ -320,7 +327,7 @@ function navigateToSettings(event) {
 .app-header-shell--dark .app-header-shell__nav .nav-link:hover,
 .app-header-shell--dark .app-header-shell__actions .nav-link:hover,
 .app-header-shell--dark .app-header-shell__utility .dropdown-toggle:hover {
-  background: rgba(59, 130, 246, 0.14);
+  background: #24496f;
   color: #ffffff;
   box-shadow: 0 10px 22px rgba(2, 6, 23, 0.22);
 }
@@ -356,7 +363,7 @@ function navigateToSettings(event) {
 
 .app-header-shell--dark .dropdown-item:hover,
 .app-header-shell--dark .dropdown-item.active {
-  background: rgba(59, 130, 246, 0.14);
+  background: #24496f;
   color: #ffffff;
 }
 

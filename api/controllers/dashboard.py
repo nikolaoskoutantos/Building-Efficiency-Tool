@@ -117,6 +117,7 @@ class DashboardTimeGridResponse(BaseModel):
     rows: List[DashboardTimeGridRow]
     current_row: Optional[DashboardTimeGridRow] = None
     optimization_context: DashboardOptimizationContext
+    latest_optimization_result: Optional[Dict[str, Any]] = None
 
 
 class DashboardScheduleRow(BaseModel):
@@ -749,6 +750,27 @@ def _build_optimization_context(building_id: int, rows: List[dict[str, Any]], re
     )
 
 
+def _fetch_latest_optimization_result(
+    db: Session,
+    building_id: int,
+    user_id: int,
+) -> Optional[dict[str, Any]]:
+    stmt = text(
+        """
+        SELECT output_data
+        FROM optimization_results
+        WHERE building_id = :building_id
+          AND (user_id = :user_id OR user_id IS NULL)
+          AND is_optimized IS TRUE
+          AND output_data IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    row = db.execute(stmt, {"building_id": building_id, "user_id": user_id}).mappings().first()
+    return None if row is None else row.get("output_data")
+
+
 def _fetch_efficiency_tool_rows(
     db: Session,
     building_id: int,
@@ -1002,6 +1024,11 @@ async def get_dashboard_time_grid(
         )
 
         optimization_context = _build_optimization_context(building_id, rows, effective_ref_now)
+        latest_optimization_result = _fetch_latest_optimization_result(
+            db,
+            building_id,
+            user_id,
+        )
 
         return DashboardTimeGridResponse(
             building_id=building_id,
@@ -1009,6 +1036,7 @@ async def get_dashboard_time_grid(
             rows=[DashboardTimeGridRow(**row) for row in rows],
             current_row=None if current_row_dict is None else DashboardTimeGridRow(**current_row_dict),
             optimization_context=optimization_context,
+            latest_optimization_result=latest_optimization_result,
         )
     except HTTPException:
         raise

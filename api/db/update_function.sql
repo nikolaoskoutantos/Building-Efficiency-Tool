@@ -6,6 +6,7 @@ AS $$
 SELECT interval '5 minutes';
 $$;
 
+CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 CREATE OR REPLACE FUNCTION public.utc_timezone_name()
 RETURNS text
@@ -739,4 +740,14 @@ FROM forecast_context fc
 ORDER BY ts;
 $$;
 
+SELECT cron.schedule(
+  'aggregate-sensor-data-5m',
+  '* * * * *',
+  $$SELECT public.run_aggregate_sensor_data_5m();$$
+)
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM cron.job
+  WHERE jobname = 'aggregate-sensor-data-5m'
+);
 
