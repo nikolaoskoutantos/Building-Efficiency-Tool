@@ -78,6 +78,7 @@ app.get('/swagger.json', (req, res) => {
 
 // Mount route modules
 const weatherRouter = require('./routes/weather');
+const weatherByDIDRouter = require('./routes/weather_by_did');
 const forecastsRouter = require('./routes/forecasts');
 const historicalRouter = require('./routes/historical');
 const decryptRouter = require('./routes/decrypt');
@@ -87,6 +88,7 @@ const costGroupsRouter = require('./routes/cost_groups');
 
 app.use('/health', healthRouter);
 app.use('/', weatherRouter);
+app.use('/weather/building', weatherByDIDRouter);
 app.use('/forecasts', forecastsRouter);
 app.use('/historical', historicalRouter);
 app.use('/decrypt', decryptRouter);

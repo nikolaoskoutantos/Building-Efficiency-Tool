@@ -2,7 +2,7 @@
 import { brandSet } from '@coreui/icons'
 import DocsIcons from '../../components/DocsIcons.vue';
 
-const toKebabCase = (str) => str.replace(/([a-z])([A-Z0-9])/g, '$1-$2').toLowerCase()
+const toKebabCase = (str) => str.replaceAll(/([a-z])([A-Z0-9])/g, '$1-$2').toLowerCase()
 const icons = brandSet
 </script>
 

@@ -1,5 +1,6 @@
 const { Readable } = require('stream');
 const { encryptStreamToIpfs, storeCidMapping, healthCheck } = require('./vault');
+const { buildKnowledgeAssetId, buildCostKA, createCostKA } = require('./buildchain_dkg');
 const { v4: uuidv4 } = require('uuid');
 const XLSX = require('xlsx');
 const fs = require('fs');
@@ -182,9 +183,33 @@ async function handleCostsUpload(req, res) {
         data_type: 'costs'
       });
 
-      return res.status(200).json({ 
-        cid: result.cid, 
-        wrappedDEK: ""
+      // Publish to DKG if enabled
+      let dkgResult = null;
+      if (process.env.DKG_ENABLED === 'true') {
+        try {
+          const kaId = buildKnowledgeAssetId('material-cost', job_id);
+          const ka = buildCostKA({
+            id:              kaId,
+            ipfsCid:         result.cid,
+            contractAddress: process.env.DKG_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000',
+            creator:         { name: buyer, identifier: buyer },
+            region:          'Europe',
+            currency:        'EUR',
+            lastUpdate:      new Date().toISOString(),
+            sampleCosts:     [],
+          });
+          dkgResult = await createCostKA(ka);
+          console.log(`✅ Cost KA published to DKG`);
+        } catch (dkgErr) {
+          console.warn(`⚠️ DKG publish failed (IPFS upload still succeeded):`, dkgErr.message);
+          dkgResult = { error: dkgErr.message };
+        }
+      }
+
+      return res.status(200).json({
+        cid: result.cid,
+        wrappedDEK: "",
+        ...(dkgResult !== null && { dkg: dkgResult }),
       });
     } catch (e) {
       console.error('Vault encrypt+upload failed (costs):', e.stack || e.message);

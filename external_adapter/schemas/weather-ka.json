@@ -1,0 +1,242 @@
+{
+    "@context": {
+        "@vocab": "http://schema.org/",
+        "ex": "https://buildchain.org/ontology/",
+        "bc": "https://buildchain.org/"
+    },
+    "@id": "__BASE_ID__",
+    "@type": "Dataset",
+    "name": "Weather Oracle",
+    "description": "Knowledge Asset representing an external adapter oracle that fetches weather data via a smart contract interface. Supports current conditions, forecast, and historical data using OpenWeather and OpenMeteo APIs.",
+    "creator": {
+        "@type": "Organization",
+        "name": "Weather Oracle Team",
+        "identifier": "weather-oracle-001"
+    },
+    "dateCreated": "__DATE__",
+    "license": "https://opensource.org/licenses/MIT",
+    "keywords": [
+        "weather",
+        "oracle",
+        "smart contract",
+        "forecast",
+        "Chainlink",
+        "OpenWeather",
+        "OpenMeteo"
+    ],
+    "ex:smartContract": {
+        "@type": "ex:SmartContract",
+        "address": "__CONTRACT_ADDRESS__",
+        "blockchain": "Ethereum",
+        "network": "Base Sepolia",
+        "minimumPayment": {
+            "@type": "MonetaryAmount",
+            "currency": "ETH",
+            "value": "0.001"
+        },
+        "methods": [
+            {
+                "@id": "__BASE_ID__/method/getWeatherData",
+                "@type": "ex:ContractMethod",
+                "name": "getWeatherData",
+                "description": "Fetch current weather data from OpenWeather or OpenMeteo or both of them.",
+                "parameters": [
+                    {
+                        "@id": "__BASE_ID__/method/getWeatherData/param/id",
+                        "name": "id",
+                        "type": "string",
+                        "description": "Job Run ID"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getWeatherData/param/service",
+                        "name": "service",
+                        "type": "string",
+                        "description": "Accepted values: 'openweather', 'openmeteo', or 'both'."
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getWeatherData/param/lat",
+                        "name": "lat",
+                        "type": "number",
+                        "description": "Latitude of the location."
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getWeatherData/param/lon",
+                        "name": "lon",
+                        "type": "number",
+                        "description": "Longitude of the location."
+                    }
+                ],
+                "returns": "string"
+            },
+            {
+                "@id": "__BASE_ID__/method/getForecastData",
+                "@type": "ex:ContractMethod",
+                "name": "getForecastData",
+                "description": "Fetch forecast data from OpenMeteo.",
+                "parameters": [
+                    {
+                        "@id": "__BASE_ID__/method/getForecastData/param/id",
+                        "name": "id",
+                        "type": "string"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getForecastData/param/service",
+                        "name": "service",
+                        "type": "string"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getForecastData/param/lat",
+                        "name": "lat",
+                        "type": "number"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getForecastData/param/lon",
+                        "name": "lon",
+                        "type": "number"
+                    }
+                ],
+                "returns": "string"
+            },
+            {
+                "@id": "__BASE_ID__/method/getHistoricalData",
+                "@type": "ex:ContractMethod",
+                "name": "getHistoricalData",
+                "description": "Fetch historical weather data from OpenMeteo.",
+                "parameters": [
+                    {
+                        "@id": "__BASE_ID__/method/getHistoricalData/param/id",
+                        "name": "id",
+                        "type": "string"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getHistoricalData/param/service",
+                        "name": "service",
+                        "type": "string"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getHistoricalData/param/lat",
+                        "name": "lat",
+                        "type": "number"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getHistoricalData/param/lon",
+                        "name": "lon",
+                        "type": "number"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getHistoricalData/param/start_date",
+                        "name": "start_date",
+                        "type": "string",
+                        "format": "date",
+                        "description": "Optional start date (YYYY-MM-DD)"
+                    },
+                    {
+                        "@id": "__BASE_ID__/method/getHistoricalData/param/end_date",
+                        "name": "end_date",
+                        "type": "string",
+                        "format": "date",
+                        "description": "Optional end date (YYYY-MM-DD)"
+                    }
+                ],
+                "returns": "string"
+            }
+        ]
+    },
+    "ex:weatherDetails": {
+        "@id": "__BASE_ID__/weatherDetails",
+        "ex:services": ["OpenWeather", "OpenMeteo"],
+        "ex:coverage": "Global",
+        "ex:updateFrequency": "10 minutes",
+        "ex:dataGranularity": "city-level, hourly resolution",
+        "ex:parameters": {
+            "ex:openweather": [
+                "temperature", "feels_like", "temp_min", "temp_max",
+                "pressure", "humidity", "sea_level", "grnd_level",
+                "visibility", "wind_speed", "wind_deg", "wind_gust",
+                "clouds", "weather_description", "weather_icon",
+                "sunrise", "sunset", "timezone"
+            ],
+            "ex:openmeteo": [
+                "temperature", "windspeed", "winddirection",
+                "weathercode", "is_day", "elevation", "timezone"
+            ]
+        },
+        "ex:responseFormats": {
+            "ex:openweather": {
+                "ex:temperatureUnit": "°C",
+                "ex:windSpeedUnit": "m/s",
+                "ex:pressureUnit": "hPa",
+                "ex:visibilityUnit": "meters"
+            },
+            "ex:openmeteo": {
+                "ex:temperatureUnit": "°C",
+                "ex:windSpeedUnit": "km/h",
+                "ex:windDirectionUnit": "degrees"
+            }
+        },
+        "ex:temperatureAccuracy": "+-0.3 C",
+        "ex:humidityAccuracy": "+-2%",
+        "ex:windSpeedAccuracy": "+-1 m/s",
+        "ex:locationName": "__LOCATION_NAME__",
+        "ex:locationLatitude": "__LAT__",
+        "ex:locationLongitude": "__LON__",
+        "ex:buildingDID": "__BUILDING_DID__"
+    },
+    "ex:qualityOfExperience": {
+        "@id": "__BASE_ID__/qoe",
+        "@type": "ex:QoEReport",
+        "ex:evaluationID": "__QOE_EVAL_ID__",
+        "ex:servicesEvaluated": ["openweather", "openmeteo"],
+        "ex:overallQoEScore": "__QOE_OVERALL__",
+        "ex:serviceMetrics": {
+            "ex:openweather": {
+                "ex:responseTimeMs": "__QOE_OW_RT__",
+                "ex:dataCompleteness": "__QOE_OW_DC__",
+                "ex:reliabilityScore": "__QOE_OW_RS__",
+                "ex:accuracyScore": "__QOE_OW_AS__",
+                "ex:availability": "__QOE_OW_AV__"
+            },
+            "ex:openmeteo": {
+                "ex:responseTimeMs": "__QOE_OM_RT__",
+                "ex:dataCompleteness": "__QOE_OM_DC__",
+                "ex:reliabilityScore": "__QOE_OM_RS__",
+                "ex:accuracyScore": "__QOE_OM_AS__",
+                "ex:availability": "__QOE_OM_AV__"
+            }
+        }
+    },
+    "distribution": {
+        "@type": "DataDownload",
+        "name": "Chainlink External Adapter Weather API",
+        "encodingFormat": "application/json",
+        "contentUrl": "https://buildchain-1-testnet.origin-trail.network/api-docs"
+    },
+    "identifier": "weather-oracle-001",
+    "version": "1.0.0",
+    "isAccessibleForFree": false,
+    "hasPart": [
+        {
+            "@id": "ipfs://__IPFS_CID__",
+            "@type": "Dataset",
+            "name": "Weather Oracle IPFS Archive",
+            "description": "IPFS-hosted folder with weather API response examples, a forecast model, and README documentation.",
+            "license": "https://creativecommons.org/licenses/by/4.0/",
+            "isAccessibleForFree": true,
+            "distribution": {
+                "@type": "DataDownload",
+                "contentUrl": "ipfs://__IPFS_CID__",
+                "encodingFormat": "application/octet-stream",
+                "name": "IPFS Folder Root for Weather Oracle"
+            },
+            "hasPart": [
+                {
+                    "@type": "MediaObject",
+                    "name": "README.md",
+                    "contentUrl": "ipfs://__IPFS_CID__/README.md",
+                    "encodingFormat": "text/markdown",
+                    "contentSize": "2KB"
+                }
+            ]
+        }
+    ]
+}

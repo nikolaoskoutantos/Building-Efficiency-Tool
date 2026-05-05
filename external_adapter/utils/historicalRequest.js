@@ -1,6 +1,7 @@
 const { Requester, Validator } = require('@chainlink/external-adapter');
 const { uploadToIPFS } = require('./ipfs.js');
 const { encryptStreamToIpfs, storeCidMapping, healthCheck } = require('./vault');
+const { buildKnowledgeAssetId, buildWeatherKA, createWeatherKA } = require('./buildchain_dkg');
 const { Readable } = require('node:stream');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
@@ -11,7 +12,8 @@ const customParams = {
   lon: ['lon', 'longitude'],
   service: ['service'], // Accepts 'openmeteo' (only service supporting free historical data)
   start_date: ['start_date', 'start'], // Optional
-  end_date: ['end_date', 'end'] // Optional
+  end_date: ['end_date', 'end'], // Optional
+  buildingDID: ['buildingDID'], // Optional — populated when called via /weather/building/historical
 };
 
 // Function to get default historical date range (past 7 days)
@@ -35,6 +37,7 @@ const createHistoricalRequest = async (input, callback) => {
   const service = validator.validated.data.service ? validator.validated.data.service.toLowerCase() : 'openmeteo';
   const lat = validator.validated.data.lat;
   const lon = validator.validated.data.lon;
+  const buildingDID = validator.validated.data.buildingDID || '';
   let startDate = validator.validated.data.start_date;
   let endDate = validator.validated.data.end_date;
 
@@ -90,7 +93,7 @@ const createHistoricalRequest = async (input, callback) => {
           console.log('🔐 Encrypting historical data with Vault...');
           
           // Create filename with timestamp
-          const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          const filename = `historical_weather_${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`;
           
           // Create a readable stream from the weather data
           const weatherDataStream = new Readable({
@@ -128,18 +131,48 @@ const createHistoricalRequest = async (input, callback) => {
           console.log(`✅ Historical data encrypted and stored. CID: ${cid}`);
         } else {
           console.log('⚠️ Vault unhealthy, falling back to plain IPFS storage');
-          const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          const filename = `historical_weather_${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`;
           cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
         }
       } catch (vaultError) {
         console.log(`⚠️ Vault encryption failed: ${vaultError.message}, falling back to plain IPFS`);
-        const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        const filename = `historical_weather_${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`;
         cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
       }
     } else {
       console.log('📦 Vault disabled, storing in plain IPFS');
-      const filename = `historical_weather_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      const filename = `historical_weather_${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`;
       cid = await uploadToIPFS(JSON.stringify(response.data, null, 2), filename);
+    }
+
+    // Publish to DKG if enabled
+    let dkgResult = null;
+    if (process.env.DKG_ENABLED === 'true') {
+      try {
+        const kaId = buildKnowledgeAssetId('historical', jobRunID);
+        const ka = buildWeatherKA({
+          id:              kaId,
+          ipfsCid:         cid,
+          contractAddress: process.env.DKG_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000',
+          buildingDID,
+          location: {
+            name: `${lat}, ${lon}`,
+            lat:  String(lat),
+            lon:  String(lon),
+          },
+          qoe: {
+            evaluationID: 'qoe-001',
+            overallScore: '0%',
+            openweather:  { responseTimeMs: 0, dataCompleteness: '0%', reliabilityScore: '0%', accuracyScore: '0%', availability: 'Unknown' },
+            openmeteo:    { responseTimeMs: 0, dataCompleteness: '0%', reliabilityScore: '0%', accuracyScore: '0%', availability: 'Unknown' },
+          },
+        });
+        dkgResult = await createWeatherKA(ka);
+        console.log(`✅ Historical Weather KA published to DKG`);
+      } catch (dkgErr) {
+        console.warn(`⚠️ DKG publish failed (IPFS upload still succeeded): ${dkgErr.message}`);
+        dkgResult = { error: dkgErr.message };
+      }
     }
 
     // Return response with encryption status
@@ -150,6 +183,7 @@ const createHistoricalRequest = async (input, callback) => {
       service: service,
       date_range: `${startDate} to ${endDate}`,
       coordinates: { lat, lon },
+      ...(dkgResult !== null && { dkg: dkgResult }),
       statusCode: 200
     });
   } catch (error) {

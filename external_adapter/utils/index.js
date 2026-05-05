@@ -1,11 +1,37 @@
 const { Requester, Validator } = require('@chainlink/external-adapter');
 const { uploadToIPFS } = require('./ipfs.js');
 const { encryptStreamToIpfs, storeCidMapping, healthCheck, getCidMapping, decryptFromIpfsToStream } = require('./vault');
+const { buildKnowledgeAssetId, buildWeatherKA, createWeatherKA, getBuildingLatLon } = require('./buildchain_dkg');
 const { Readable } = require('node:stream');
 const { v4: uuidv4 } = require('uuid'); // Import the uuid library
 const fs = require('node:fs');
 const path = require('node:path');
 require('dotenv').config();
+
+// Extract QoE metrics from the responses array for DKG KA building
+function extractQoE(responses) {
+  const qoeItem = responses.find(r => r.service === 'qoe');
+  if (!qoeItem) return null;
+  const d = qoeItem.data;
+  return {
+    evaluationID:  d.ID || 'qoe-001',
+    overallScore:  d.overall_qoe_score || '0%',
+    openweather: {
+      responseTimeMs:   d.qoe_results?.openweather?.response_time_ms || 0,
+      dataCompleteness: d.qoe_results?.openweather?.data_completeness || '0%',
+      reliabilityScore: d.qoe_results?.openweather?.reliability_score || '0%',
+      accuracyScore:    d.qoe_results?.openweather?.accuracy_score || '0%',
+      availability:     d.qoe_results?.openweather?.availability || 'Unknown',
+    },
+    openmeteo: {
+      responseTimeMs:   d.qoe_results?.openmeteo?.response_time_ms || 0,
+      dataCompleteness: d.qoe_results?.openmeteo?.data_completeness || '0%',
+      reliabilityScore: d.qoe_results?.openmeteo?.reliability_score || '0%',
+      accuracyScore:    d.qoe_results?.openmeteo?.accuracy_score || '0%',
+      availability:     d.qoe_results?.openmeteo?.availability || 'Unknown',
+    },
+  };
+}
 
 // Define custom parameters to be used by the adapter
 const customParams = {
@@ -38,8 +64,7 @@ const fetchOpenWeatherData = async (lat, lon, forecast) => {
     const openWeatherResponse = await Requester.request(openWeatherConfig);
     return { service: 'openweather', data: openWeatherResponse.data };
   } catch (error) {
-    // Log only static message
-    console.warn("Failed to fetch OpenWeather data");
+    console.warn("Failed to fetch OpenWeather data:", error.message);
     return null;
   }
 };
@@ -60,8 +85,7 @@ const fetchOpenMeteoData = async (lat, lon, forecast) => {
     const openMeteoResponse = await Requester.request(openMeteoConfig);
     return { service: 'openmeteo', data: openMeteoResponse.data };
   } catch (error) {
-    // Log only static message
-    console.warn("Failed to fetch OpenMeteo data");
+    console.warn("Failed to fetch OpenMeteo data:", error.message);
     return null;
   }
 };
@@ -119,7 +143,7 @@ const createRequest = async (input, callback, forecast = false) => {
     });
   }
 
-  const { lat, lon, service } = input.data;
+  const { lat, lon, service, buildingDID } = input.data;
 
   // Validate required parameters
   if (typeof lat !== 'number' || typeof lon !== 'number') {
@@ -198,8 +222,7 @@ const createRequest = async (input, callback, forecast = false) => {
       cid = await uploadToIPFS(JSON.stringify(responses, null, 2), filename);
     }
   } catch (vaultError) {
-    // Log only static message
-    console.error(`[${new Date().toISOString()}] ❌ Vault encryption or write failed`);
+    console.error(`[${new Date().toISOString()}] ❌ Vault encryption or write failed:`, vaultError.message);
     // Do NOT fall back to plain IPFS upload if Vault write fails after encryption
     return callback(500, {
       jobRunID,
@@ -209,12 +232,44 @@ const createRequest = async (input, callback, forecast = false) => {
     });
   }
 
+  // Publish to DKG if enabled
+  let dkgResult = null;
+  if (process.env.DKG_ENABLED === 'true') {
+    try {
+      const qoe = extractQoE(responses);
+      const kaId = buildKnowledgeAssetId('weather', jobRunID);
+      const ka = buildWeatherKA({
+        id:              kaId,
+        ipfsCid:         cid,
+        contractAddress: process.env.DKG_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000',
+        buildingDID,
+        location: {
+          name: `${lat}, ${lon}`,
+          lat:  String(lat),
+          lon:  String(lon),
+        },
+        qoe: qoe || {
+          evaluationID:  'qoe-001',
+          overallScore:  '0%',
+          openweather:   { responseTimeMs: 0, dataCompleteness: '0%', reliabilityScore: '0%', accuracyScore: '0%', availability: 'Unknown' },
+          openmeteo:     { responseTimeMs: 0, dataCompleteness: '0%', reliabilityScore: '0%', accuracyScore: '0%', availability: 'Unknown' },
+        },
+      });
+      dkgResult = await createWeatherKA(ka);
+      console.log(`[${new Date().toISOString()}] ✅ Weather KA published to DKG`);
+    } catch (dkgErr) {
+      console.warn(`[${new Date().toISOString()}] ⚠️ DKG publish failed (IPFS upload still succeeded):`, dkgErr.message);
+      dkgResult = { error: dkgErr.message };
+    }
+  }
+
   // Return only the CID in the response
   // Log only safe metadata
   console.log(`[${new Date().toISOString()}] [DEBUG] Calling callback with CID`);
   callback(200, {
     jobRunID,
-    cid: cid, // Return only the CID
+    cid,
+    ...(dkgResult !== null && { dkg: dkgResult }),
     statusCode: 200,
   });
 };
@@ -465,8 +520,7 @@ const handleDecryptRequest = async (req, res) => {
     });
     
   } catch (error) {
-    // Log only static message
-    console.error(`[${new Date().toISOString()}] ❌ Decryption failed`);
+    console.error(`[${new Date().toISOString()}] ❌ Decryption failed:`, error.message);
     res.status(500).json({
       jobRunID,
       status: 'errored',
@@ -619,8 +673,7 @@ const handleHealthRequest = async (req, res) => {
     res.status(statusCode).json(healthStatus);
     
   } catch (error) {
-    // Log only static message
-    console.error('❌ Health check failed');
+    console.error('❌ Health check failed:', error.message);
     res.status(500).json({
       jobRunID,
       overall_status: 'error',

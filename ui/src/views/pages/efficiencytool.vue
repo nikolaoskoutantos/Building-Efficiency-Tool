@@ -276,8 +276,8 @@ function formatRecommendationLabel(value) {
   }
 
   return String(value)
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (character) => character.toUpperCase())
+    .replaceAll(/_/g, ' ')
+    .replaceAll(/\b\w/g, (character) => character.toUpperCase())
 }
 
 const optimizationSummary = computed(() => {
@@ -367,7 +367,7 @@ const optimizationReadinessMessage = computed(() => {
     if (field === 'hvac_setpoint') return 'HVAC setpoint'
     if (field === 'outdoor_temperatures') return 'outdoor forecast'
     if (field === 'ts') return 'reference time'
-    return field.replace(/_/g, ' ')
+    return field.replaceAll(/_/g, ' ')
   })
 
   return `Optimization is waiting for ${labels.join(', ')} before it can run.`

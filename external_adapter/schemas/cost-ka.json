@@ -1,0 +1,101 @@
+{
+    "@context": {
+        "@vocab": "http://schema.org/",
+        "ex": "https://buildchain.org/ontology/",
+        "bc": "https://buildchain.org/"
+    },
+    "@id": "__BASE_ID__",
+    "@type": "Dataset",
+    "name": "Material Cost Data",
+    "description": "Knowledge Asset describing static and periodically updated construction material cost data stored on IPFS and retrieved by a simple smart contract call.",
+    "creator": {
+        "@type": "Person",
+        "name": "__CREATOR_NAME__",
+        "identifier": "__CREATOR_ID__"
+    },
+    "dateCreated": "__DATE__",
+    "license": "https://opensource.org/licenses/MIT",
+    "keywords": [
+        "material cost data",
+        "construction materials",
+        "unit prices",
+        "building materials",
+        "cost dataset",
+        "Chainlink",
+        "decentralized cost data"
+    ],
+    "ex:smartContract": {
+        "@type": "ex:SmartContract",
+        "address": "__CONTRACT_ADDRESS__",
+        "blockchain": "Ethereum",
+        "network": "Base Sepolia",
+        "minimumPayment": {
+            "@type": "MonetaryAmount",
+            "currency": "ETH",
+            "value": "0.0003"
+        },
+        "methods": [
+            {
+                "@id": "__BASE_ID__/method/getCostData",
+                "@type": "ex:ContractMethod",
+                "name": "getCostData",
+                "description": "Fetches the latest material cost dataset stored on IPFS.",
+                "returns": "string"
+            }
+        ]
+    },
+    "ex:materialCostDetails": {
+        "@id": "__BASE_ID__/costDetails",
+        "ex:updateFrequency": "monthly",
+        "ex:region": "Europe",
+        "ex:currency": "EUR",
+        "ex:lastUpdate": "__LAST_UPDATE__"
+    },
+    "ex:sampleCostPreview": "__SAMPLE_COSTS__",
+    "identifier": "__BASE_ID__",
+    "version": "1.0.0",
+    "isAccessibleForFree": false,
+    "hasPart": [
+        {
+            "@id": "ipfs://__IPFS_CID__",
+            "@type": "Dataset",
+            "name": "Material Cost Data Files",
+            "description": "IPFS-hosted folder containing detailed construction material cost tables and documentation.",
+            "creator": {
+                "@type": "Person",
+                "name": "__UPLOADER_NAME__",
+                "identifier": "__UPLOADER_ID__"
+            },
+            "dateCreated": "__DATE__",
+            "license": "https://creativecommons.org/licenses/by/4.0/",
+            "keywords": [
+                "material cost dataset",
+                "construction materials",
+                "pricing tables",
+                "BOM data",
+                "unit cost repository",
+                "IPFS dataset"
+            ],
+            "isAccessibleForFree": true,
+            "distribution": {
+                "@type": "DataDownload",
+                "contentUrl": "ipfs://__IPFS_CID__",
+                "encodingFormat": "application/octet-stream",
+                "name": "IPFS Folder Root for Material Cost Data"
+            },
+            "ex:additionalFileName": "README.md",
+            "ex:additionalFileUrl": "ipfs://__IPFS_CID__/README.md",
+            "ex:additionalFileFormat": "text/markdown",
+            "ex:additionalFileSize": "4KB",
+            "hasPart": [
+                {
+                    "@type": "MediaObject",
+                    "name": "material_costs.csv",
+                    "contentUrl": "ipfs://__IPFS_CID__/material_costs.csv",
+                    "encodingFormat": "text/csv",
+                    "contentSize": "220KB"
+                }
+            ]
+        }
+    ]
+}
