@@ -77,8 +77,13 @@ def run_migrations_online() -> None:
 
     """
 
-    # Override sqlalchemy.url with DATABASE_URL from environment if present
-    db_url = os.environ.get("DATABASE_URL")
+    # Inside Docker, /.dockerenv exists — use DATABASE_URL (service hostname "db").
+    # On the host machine, prefer DATABASE_URL_ALEMBIC (localhost:5444 mapped port).
+    in_docker = os.path.exists("/.dockerenv")
+    if in_docker:
+        db_url = os.environ.get("DATABASE_URL")
+    else:
+        db_url = os.environ.get("DATABASE_URL_ALEMBIC") or os.environ.get("DATABASE_URL")
     if db_url:
         config.set_main_option("sqlalchemy.url", db_url)
 
