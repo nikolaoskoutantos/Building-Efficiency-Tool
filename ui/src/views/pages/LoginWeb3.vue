@@ -51,7 +51,7 @@ type Eip1193Provider = {
   removeListener?: (...args: unknown[]) => void
 }
 
-const { open } = useAppKit()
+const { open, close } = useAppKit()
 const { disconnect } = useDisconnect()
 const accountData = useAppKitAccount()
 const appKitProviderState = useAppKitProvider<Eip1193Provider>('eip155')
@@ -156,11 +156,12 @@ Nonce: ${nonce}
 Issued at: ${timestamp}`
 }
 
-function setBasicWalletData(address: string) {
+function setBasicWalletData(address: string, walletProvider: Eip1193Provider | null) {
   auth.setWalletData({
     address,
     chainId: null,
     walletType: 'web3',
+    walletProvider,
     balance: null,
     ensName: null,
     avatar: null,
@@ -211,7 +212,7 @@ async function authenticateWalletAddress(address: string, providerSource: Eip119
     return
   }
 
-  setBasicWalletData(address)
+  setBasicWalletData(address, providerSource)
 
   const authData = await signMessage(address, providerSource)
   const result = await auth.setSignedMessage(authData)
@@ -269,6 +270,7 @@ async function connectWallet() {
     await open()
 
     const { address, provider } = await waitForWalletReady()
+    await close?.()
     await authenticateWalletAddress(address, provider)
   } catch (error) {
     console.error('Wallet authentication failed:', error)

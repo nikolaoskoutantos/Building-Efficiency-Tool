@@ -12,6 +12,7 @@ export const useAuthStore = defineStore('auth', {
     jwtToken: null,
     refreshToken: null,
     walletType: null,
+    walletProvider: null,
     balance: null,
     ensName: null,
     avatar: null,
@@ -105,10 +106,11 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
-    setWalletData({ address, chainId, walletType, balance, ensName, avatar }) {
+    setWalletData({ address, chainId, walletType, walletProvider = null, balance, ensName, avatar }) {
       this.walletAddress = address
       this.chainId = chainId
       this.walletType = walletType
+      this.walletProvider = walletProvider
       this.balance = balance
       this.ensName = ensName
       this.avatar = avatar
@@ -280,6 +282,7 @@ export const useAuthStore = defineStore('auth', {
       this.walletAddress = null
       this.chainId = null
       this.walletType = null
+      this.walletProvider = null
       this.balance = null
       this.ensName = null
       this.avatar = null
@@ -384,6 +387,7 @@ export const useAuthStore = defineStore('auth', {
         console.log('❌ No refresh token available')
         this.isAuthenticated = false
         this.userProfile = null
+        this.walletProvider = null
         return false
       }
       try {
@@ -405,6 +409,7 @@ export const useAuthStore = defineStore('auth', {
           this.clearRefreshToken()
           this.isAuthenticated = false
           this.userProfile = null
+          this.walletProvider = null
           return false
         }
       } catch (error) {
@@ -479,6 +484,7 @@ export const useAuthStore = defineStore('auth', {
           this.isAuthenticated = false
           this.userProfile = null
           this.walletAddress = null
+          this.walletProvider = null
           return false
         }
       } catch (error) {
@@ -487,6 +493,7 @@ export const useAuthStore = defineStore('auth', {
         this.isAuthenticated = false
         this.userProfile = null
         this.walletAddress = null
+        this.walletProvider = null
         return false
       }
     },
@@ -526,6 +533,7 @@ export const useAuthStore = defineStore('auth', {
       this.walletAddress = null
       this.chainId = null
       this.walletType = null
+      this.walletProvider = null
       this.balance = null
       this.ensName = null
       this.avatar = null

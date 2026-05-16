@@ -796,9 +796,32 @@ export default {
       return confirm('This will extract the public key from your connected wallet and replace your existing public key. Continue?')
     },
 
+    async resolveWalletSigner(walletAddress) {
+      const authStore = useAuthStore()
+      const providerSource = authStore.walletProvider || globalThis.ethereum
+
+      if (!providerSource) {
+        throw new Error('No Ethereum provider found. Please make sure MetaMask is installed.')
+      }
+
+      const requestedAccounts = await providerSource.request({ method: 'eth_requestAccounts' })
+      const normalizedWallet = String(walletAddress || '').toLowerCase()
+      const matchingAccount = Array.isArray(requestedAccounts)
+        ? requestedAccounts.find(account => String(account || '').toLowerCase() === normalizedWallet)
+        : null
+
+      if (!matchingAccount) {
+        throw new Error(`Connected wallet ${walletAddress} is not available in the current provider session.`)
+      }
+
+      const provider = new ethers.providers.Web3Provider(providerSource)
+      return provider.getSigner(matchingAccount)
+    },
+
     async signWalletMessage(signer, walletAddress) {
       const message = `Extract public key for QoE Application\nWallet: ${walletAddress}\nTimestamp: ${new Date().toISOString()}`
-      return await signer.signMessage(message)
+      const signature = await signer.signMessage(message)
+      return { message, signature }
     },
 
     extractPublicKeyFromSignature(message, signature) {
@@ -831,16 +854,9 @@ export default {
       try {
         const authStore = useAuthStore()
         const walletAddress = authStore.walletAddress
-        
-        if (!globalThis.ethereum) {
-          throw new Error('No Ethereum provider found. Please make sure MetaMask is installed.')
-        }
 
-        const provider = new ethers.providers.Web3Provider(globalThis.ethereum)
-        const signer = provider.getSigner()
-        const signature = await this.signWalletMessage(signer, walletAddress)
-        
-        const message = `Extract public key for QoE Application\nWallet: ${walletAddress}\nTimestamp: ${new Date().toISOString()}`
+        const signer = await this.resolveWalletSigner(walletAddress)
+        const { message, signature } = await this.signWalletMessage(signer, walletAddress)
         this.settings.public_key = this.extractPublicKeyFromSignature(message, signature)
         
         this.showAlert('success', `Public key extracted from wallet ${walletAddress}! Make sure to save your settings.`)

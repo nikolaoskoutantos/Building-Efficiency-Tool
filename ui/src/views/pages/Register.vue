@@ -135,7 +135,7 @@ import { ethers } from 'ethers'
 import { buildApiUrl } from '../../config/api.js'
 
 const router = useRouter()
-const { open } = useAppKit()
+const { open, close } = useAppKit()
 const { disconnect } = useDisconnect()
 const accountData = useAppKitAccount()
 const appKitProviderState = useAppKitProvider('eip155')
@@ -451,6 +451,7 @@ async function connectWallet() {
   try {
     await open()
     const { address, provider } = await waitForWalletReady()
+    await close?.()
     connectedAddress.value = address
     activeProvider.value = provider
   } catch (error) {
