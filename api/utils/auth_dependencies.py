@@ -1,11 +1,13 @@
-from fastapi import HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 import jwt
 import os
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+from db.connection import get_db
 from models.hvac_models import User
+from models.user_token import TOKEN_TYPE_ACCESS
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env"))
 
@@ -102,11 +104,73 @@ def _extract_jwt_payload(request: Request) -> dict:
     return decode_jwt_token(token)
 
 
+# ---------------------------------------------------------------------------
+# DB-backed payload extraction — validates jti against user_tokens table.
+# Falls back to the cookie path (no DB needed) when AUTH_TYPE is "cookie".
+# ---------------------------------------------------------------------------
+
+def _extract_payload_verified(request: Request, db: Session) -> dict:
+    """Like _extract_payload() but also verifies jti in DB for JWT mode."""
+    if AUTH_TYPE == "cookie":
+        return _extract_cookie_payload(request)
+    if AUTH_TYPE == "jwt":
+        return _extract_jwt_payload_verified(request, db)
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Unsupported AUTH_TYPE: {AUTH_TYPE}",
+    )
+
+
+def _extract_jwt_payload_verified(request: Request, db: Session) -> dict:
+    """Extract Bearer token, verify signature/expiry, then check jti in DB."""
+    from utils.token_service import verify_access_token  # local import avoids circular
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith(BEARER_PREFIX):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_NOT_AUTHENTICATED,
+        )
+
+    token = auth_header[len(BEARER_PREFIX):]
+
+    # Tokens that pre-date the jti migration have no "jti" claim.
+    # Decode first; if jti is present, do the full DB check.
+    try:
+        raw = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_TOKEN_EXPIRED,
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=ERROR_INVALID_TOKEN,
+        )
+
+    if raw.get("jti"):
+        # Full DB-backed verification (revocation check included)
+        raw = verify_access_token(token, db)
+
+    role = _normalize_role(raw.get("role"))
+    return {
+        "user_id": raw.get("user_id") or raw.get("user"),
+        "wallet": raw.get("wallet"),
+        "role": role,
+        "jti": raw.get("jti"),
+    }
+
+
 def get_current_user_role(allowed_roles: list[str]):
+    """Returns a FastAPI dependency that checks the role AND verifies jti in DB."""
     normalized_roles = [r.upper() for r in allowed_roles]
 
-    def _check(request: Request) -> dict:
-        payload = _extract_payload(request)
+    def _check(
+        request: Request,
+        db: Session = Depends(get_db),
+    ) -> dict:
+        payload = _extract_payload_verified(request, db)
         if payload["role"] not in normalized_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

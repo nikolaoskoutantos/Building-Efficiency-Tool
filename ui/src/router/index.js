@@ -43,6 +43,11 @@ const routes = [
     name: 'LoginWeb3',
     component: () => import('@/views/pages/LoginWeb3.vue'),
   },
+  {
+    path: '/register',
+    name: 'RegisterWeb3',
+    component: () => import('@/views/pages/Register.vue'),
+  },
 ]
 
 // 2. Create the router

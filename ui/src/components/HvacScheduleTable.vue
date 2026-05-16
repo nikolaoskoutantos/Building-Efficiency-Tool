@@ -2,7 +2,40 @@
   <CCard class="mb-4 hvac-schedule-table">
     <CCardBody>
       <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap">
-        <h5 class="mb-2 mb-sm-0">HVAC Schedule</h5>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <h5 class="mb-0">HVAC Schedule</h5>
+          <!-- Device selector — inline, compact -->
+          <select
+            v-if="props.devices.length > 0"
+            id="hvac-device-select"
+            class="form-select form-select-sm device-inline-select"
+            :value="props.selectedDeviceId"
+            @change="onDeviceChange"
+            aria-label="Select HVAC unit"
+          >
+            <option v-for="device in props.devices" :key="device.id" :value="device.id">
+              {{ device.name }}
+            </option>
+          </select>
+          <!-- Zone selector — only shown for multi-zone (industrial) units -->
+          <select
+            v-if="props.showZoneSelector"
+            id="hvac-zone-select"
+            class="form-select form-select-sm device-inline-select"
+            :value="props.selectedZoneId"
+            @change="onZoneChange"
+            aria-label="Select zone"
+          >
+            <option v-for="zone in props.zones" :key="zone.id" :value="zone.id">
+              {{ zone.name }}
+            </option>
+          </select>
+          <Transition name="save-msg">
+            <span v-if="props.scheduleSaveMessage" class="schedule-status-text--success save-msg-inline">
+              {{ props.scheduleSaveMessage }}
+            </span>
+          </Transition>
+        </div>
         <div style="display: flex; gap: 0.5rem;">
           <CButton color="primary" size="sm" @click="addRow">Add Period</CButton>
           <CButton
@@ -15,12 +48,6 @@
             {{ props.optimizeButtonLabel }}
           </CButton>
         </div>
-      </div>
-      <div v-if="props.scheduleSaving" class="schedule-status-text mb-2">
-        Saving schedule changes...
-      </div>
-      <div v-else-if="props.scheduleSaveMessage" class="schedule-status-text schedule-status-text--success mb-2">
-        {{ props.scheduleSaveMessage }}
       </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle mb-0">
@@ -38,7 +65,7 @@
                 <ElTimePicker
                   v-model="row.start"
                   class="w-100"
-                  format="hh:mm A"
+                  format="HH:mm"
                   value-format="HH:mm"
                   :clearable="false"
                   :teleported="true"
@@ -51,7 +78,7 @@
                 <ElTimePicker
                   v-model="row.end"
                   class="w-100"
-                  format="hh:mm A"
+                  format="HH:mm"
                   value-format="HH:mm"
                   :clearable="false"
                   :teleported="true"
@@ -82,7 +109,7 @@
 
 <script setup>
 
-const emit = defineEmits(['optimize', 'schedule-change'])
+const emit = defineEmits(['optimize', 'schedule-change', 'device-change', 'zone-change'])
 const props = defineProps({
   optimizeLoading: {
     type: Boolean,
@@ -104,13 +131,47 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  devices: {
+    type: Array,
+    default: () => [],
+  },
+  selectedDeviceId: {
+    type: [Number, String, null],
+    default: null,
+  },
+  zones: {
+    type: Array,
+    default: () => [],
+  },
+  selectedZoneId: {
+    type: [Number, String, null],
+    default: null,
+  },
+  showZoneSelector: {
+    type: Boolean,
+    default: false,
+  },
+  currentSetpoint: {
+    type: Number,
+    default: null,
+  },
 })
 
 function emitOptimize() {
   if (props.optimizeDisabled || props.optimizeLoading) {
     return
   }
-  emit('optimize');
+  emit('optimize')
+}
+
+function onDeviceChange(event) {
+  const id = Number(event.target.value)
+  emit('device-change', id)
+}
+
+function onZoneChange(event) {
+  const id = Number(event.target.value)
+  emit('zone-change', id)
 }
 
 import { ref, watch } from 'vue'
@@ -180,6 +241,8 @@ function normalizeScheduleRows(rows) {
       end: row.end,
       enabled: row.enabled !== false,
       setpoint: row?.enabled === false ? null : (row?.setpoint ?? null),
+      start_ts: row?.start_ts ?? null,
+      end_ts: row?.end_ts ?? null,
     }))
 }
 
@@ -191,6 +254,23 @@ function addMinutesToTimeLabel(value, deltaMinutes) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
 }
 
+function getCurrentAppTimeLabel() {
+  const now = new Date()
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Athens',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(now)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value]),
+  )
+  return `${parts.hour}:${parts.minute}`
+}
+
 function addRow() {
   // Helper to pad numbers
   const pad = n => n.toString().padStart(2, '0');
@@ -199,16 +279,11 @@ function addRow() {
     start = schedule.value[schedule.value.length - 1].end
     end = addMinutesToTimeLabel(start, 60)
   } else {
-    const now = new Date();
-    now.setMilliseconds(0);
-    now.setSeconds(0);
-    let min = now.getMinutes();
-    if (min % 5 === 0) {
-      now.setMinutes(min);
-    } else {
-      now.setMinutes(min + (5 - (min % 5)));
-    }
-    start = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const currentAppTime = getCurrentAppTimeLabel()
+    const [hours, minutes] = currentAppTime.split(':').map(Number)
+    const roundedMinutes = minutes % 5 === 0 ? minutes : minutes + (5 - (minutes % 5))
+    const roundedTotalMinutes = hours * 60 + roundedMinutes
+    start = `${pad(Math.floor((roundedTotalMinutes % 1440) / 60))}:${pad(roundedTotalMinutes % 60)}`;
     end = addMinutesToTimeLabel(start, 60)
   }
   schedule.value.push({
@@ -216,13 +291,36 @@ function addRow() {
     start,
     end,
     enabled: controlStore.preferences.switchValue !== false,
-    setpoint: controlStore.preferences.slider1 ?? null,
+    setpoint: props.currentSetpoint ?? controlStore.preferences.slider1 ?? null,
   });
   syncScheduleToStore(true)
 }
 
+function getNextHourTimeLabel() {
+  const now = new Date()
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Athens',
+    hour: '2-digit',
+    hour12: false,
+  })
+  const hour = Number.parseInt(formatter.format(now), 10)
+  return `${String((hour + 1) % 24).padStart(2, '0')}:00`
+}
+
 function removeRow(idx) {
-  schedule.value.splice(idx, 1)
+  if (schedule.value.length <= 1) {
+    // Replace the last row with a disabled placeholder starting next hour.
+    // This keeps the schedule non-empty so the DB always has a row to anchor to.
+    schedule.value = [{
+      id: Date.now() + Math.random(),
+      start: getNextHourTimeLabel(),
+      end: '23:59',
+      enabled: false,
+      setpoint: null,
+    }]
+  } else {
+    schedule.value.splice(idx, 1)
+  }
   error.value = ''
   syncScheduleToStore(true)
 }
@@ -285,6 +383,8 @@ function validateSchedule() {
   }
 
 function handleRowChange(idx) {
+  delete schedule.value[idx].start_ts
+  delete schedule.value[idx].end_ts
   if (!validateSchedule()) {
     return
   }
@@ -300,7 +400,7 @@ function handleEnabledChange(idx, value) {
 }
 
   watch(
-    () => controlStore.schedule,
+    () => controlStore.editableSchedule,
     (newSchedule) => {
       if (suppressNextStoreHydration.value) {
         suppressNextStoreHydration.value = false
@@ -340,6 +440,37 @@ function handleEnabledChange(idx, value) {
   color: #5f6b7a;
   font-size: 0.88rem;
   font-weight: 600;
+}
+
+.device-inline-select {
+  width: auto;
+  min-width: 120px;
+  max-width: 200px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+  border-radius: 10px;
+  border-color: rgba(37, 99, 235, 0.2);
+  background-color: rgba(248, 250, 252, 0.9);
+  color: #1e3a5f;
+  cursor: pointer;
+}
+
+.save-msg-inline {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.save-msg-enter-active {
+  transition: opacity 0.25s ease;
+}
+.save-msg-leave-active {
+  transition: opacity 0.6s ease;
+}
+.save-msg-enter-from,
+.save-msg-leave-to {
+  opacity: 0;
 }
 
 .schedule-status-text--success {

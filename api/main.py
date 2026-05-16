@@ -1,7 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 import os
 from controllers.health import router as health_router
@@ -27,11 +29,23 @@ from db.connection import SessionLocal, engine, Base
 from models.hvac_models import Building
 from models.service import Service  # Import Service model to ensure table creation
 from models.sensor import Sensor
-from models.sensordata import SensorData  # Import SensorData model to ensure table creation
+from models.sensor_unit import SensorUnit
+from models.sensordata import SensorData, SensorDataRaw  # Import models to ensure table creation
 from models.rate import Rate  # Import Rate model to ensure table creation
-from models.predictor import Predictor, TrainingHistory  # Import updated models
-from models.knowledge import Knowledge
+from models.user_auth_provider import UserAuthProvider
+from models.billing import SubscriptionPlan, Subscription, Payment
+from models.predictor import Predictor, TrainingHistory
 from models.mqtt_config import MQTTBrokerConfig
+from models.topology import Floor, Room, HVACZone, ZoneRoom, ZoneHVACUnit
+from models.thermostat import Thermostat, ZoneThermostat
+from models.zone_schedule import ZoneSchedule, ZoneScheduleInterval
+from models.zone_state import ZoneState
+from models.hvac_control import HVACControlModel
+from models.device_token import DeviceToken
+from models.device_command import DeviceCommand
+from models.user_token import UserToken
+from models.request_nonce import RequestNonce
+from models.auth_audit_log import AuthAuditLog
 from utils.alembic_migrations import run_alembic_upgrade, should_run_startup_migrations
 from services.hvac_optimizer_service import HVACOptimizerService  # Import HVAC service
 from db.mock_data import insert_mock_data  # Updated import path
@@ -53,9 +67,30 @@ from db.connection import async_session_maker
 @asynccontextmanager
 async def lifespan(app):
     setup_weather_scheduler(async_session_maker)
+
+    # Start MQTT subscriber + DB drain workers as background daemon threads.
+    # num_workers controls how many threads can write to DB concurrently.
+    # Raise MQTT_WORKER_THREADS in env to handle higher sensor load.
+    from workers.mqtt_subscriber import start_subscriber
+    _num_workers = int(os.getenv("MQTT_WORKER_THREADS", "2"))
+    start_subscriber(num_workers=_num_workers)
+
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+# Redirect HTTP → HTTPS in production.
+# Disabled in DEV mode (SESSION_COOKIE_SECURE=false) so local uvicorn still works.
+_HTTPS_ONLY = os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true"
+
+class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if _HTTPS_ONLY and request.url.scheme == "http":
+            https_url = request.url.replace(scheme="https")
+            return RedirectResponse(url=str(https_url), status_code=301)
+        return await call_next(request)
+
+app.add_middleware(HTTPSRedirectMiddleware)
 # app.add_middleware(EMQXACLHeaderMiddleware)
 
 # Add session middleware for login/logout

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Annotated, Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from db.connection import get_db
@@ -12,6 +12,8 @@ from models.hvac_models import Building
 from models.hvac_unit import HVACUnit
 from models.sensor import Sensor
 from models.mqtt_config import MQTTBrokerConfig
+from models.topology import HVACZone, ZoneHVACUnit
+from models.zone_schedule import ZoneSchedule, ZoneScheduleInterval
 import os
 
 from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
@@ -37,9 +39,8 @@ class DashboardDevice(BaseModel):
     id: int
     building_id: int
     building_name: str
-    central_unit: Optional[str] = None
-    zone: Optional[str] = None
-    room: Optional[str] = None
+    name: str
+    unit_type: str
     device_key: str
     sensor_count: int = 0
     created_at: Optional[str] = None
@@ -74,6 +75,13 @@ class DashboardResponse(BaseModel):
 class DashboardTimeGridRow(BaseModel):
     ts: datetime
     data_kind: Optional[str] = None
+
+    @field_validator('ts', mode='before')
+    @classmethod
+    def ensure_ts_utc(cls, v: Any) -> Any:
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
     temperature: Optional[float] = None
     presence: Optional[float] = None
     energy: Optional[float] = None
@@ -126,11 +134,14 @@ class DashboardScheduleRow(BaseModel):
     end: str
     enabled: bool
     setpoint: Optional[float] = None
+    start_ts: Optional[datetime] = None
+    end_ts: Optional[datetime] = None
 
 
 class DashboardScheduleResponse(BaseModel):
     building_id: int
     reference_time: datetime
+    timezone: str = "Europe/Athens"
     rows: List[DashboardScheduleRow]
 
 
@@ -141,6 +152,15 @@ class DashboardScheduleUpdateRequest(BaseModel):
 
 
 LOCAL_TZ = ZoneInfo("Europe/Athens")
+SCHEDULE_PRIORITY = {
+    "manual_override": 0,
+    "dr_event": 1,
+    "occupancy": 2,
+    "comfort": 3,
+}
+SCHEDULE_OFF_MODE = "off"
+SCHEDULE_ENABLED_MODE = "auto"
+SCHEDULE_DASHBOARD_OVERRIDE_NAME = "Dashboard Override"
 
 
 def _to_iso_minute_utc(value: datetime) -> str:
@@ -223,16 +243,12 @@ def _append_normalized_schedule_row(
         normalized.append((row, start_local, end_local))
         return
 
-    prev_row, prev_start, prev_end = normalized[-1]
+    _, _, prev_end = normalized[-1]
     trimmed_range = _trim_schedule_range_against_previous(prev_end, start_local, end_local)
     if trimmed_range is None:
         return
 
     start_local, end_local = trimmed_range
-    if prev_end == start_local and _schedule_rows_have_matching_state(prev_row, row):
-        normalized[-1] = (prev_row, prev_start, end_local)
-        return
-
     normalized.append((row, start_local, end_local))
 
 
@@ -248,17 +264,6 @@ def _trim_schedule_range_against_previous(
     return previous_end, end_local
 
 
-def _schedule_rows_have_matching_state(
-    previous_row: DashboardScheduleRow,
-    current_row: DashboardScheduleRow,
-) -> bool:
-    return (
-        bool(previous_row.enabled) == bool(current_row.enabled)
-        and (previous_row.setpoint if previous_row.enabled else None)
-        == (current_row.setpoint if current_row.enabled else None)
-    )
-
-
 def _get_building_hvac_unit(db: Session, building_id: int) -> HVACUnit:
     hvac_unit = (
         db.query(HVACUnit)
@@ -271,96 +276,321 @@ def _get_building_hvac_unit(db: Session, building_id: int) -> HVACUnit:
     return hvac_unit
 
 
+def _ensure_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _ensure_local(value: datetime) -> datetime:
+    return _ensure_utc(value).astimezone(LOCAL_TZ)
+
+
+def _get_building_hvac_zone(
+    db: Session,
+    building_id: int,
+    hvac_unit_id: Optional[int] = None,
+    zone_id: Optional[int] = None,
+) -> tuple[HVACUnit, HVACZone]:
+    # When zone_id is provided directly, resolve zone first then derive unit from it.
+    # This supports multi-zone industrial units where the caller already knows the zone.
+    if zone_id is not None:
+        zone = (
+            db.query(HVACZone)
+            .filter(HVACZone.id == zone_id, HVACZone.building_id == building_id)
+            .first()
+        )
+        if zone is None:
+            raise HTTPException(status_code=404, detail="Zone not found for this building.")
+        # Derive the HVAC unit from the zone (prefer the requested unit if supplied)
+        unit_query = (
+            db.query(HVACUnit)
+            .join(ZoneHVACUnit, ZoneHVACUnit.hvac_unit_id == HVACUnit.id)
+            .filter(ZoneHVACUnit.zone_id == zone.id, HVACUnit.building_id == building_id)
+        )
+        if hvac_unit_id is not None:
+            unit_query = unit_query.filter(HVACUnit.id == hvac_unit_id)
+        hvac_unit = unit_query.order_by(HVACUnit.id.asc()).first()
+        if hvac_unit is None:
+            raise HTTPException(status_code=404, detail="No HVAC unit found for this zone.")
+        return hvac_unit, zone
+
+    if hvac_unit_id is None:
+        hvac_unit = _get_building_hvac_unit(db, building_id)
+    else:
+        hvac_unit = (
+            db.query(HVACUnit)
+            .filter(HVACUnit.id == hvac_unit_id, HVACUnit.building_id == building_id)
+            .first()
+        )
+        if hvac_unit is None:
+            raise HTTPException(status_code=404, detail="HVAC unit not found for this building.")
+
+    zone = (
+        db.query(HVACZone)
+        .join(ZoneHVACUnit, ZoneHVACUnit.zone_id == HVACZone.id)
+        .filter(
+            HVACZone.building_id == building_id,
+            ZoneHVACUnit.hvac_unit_id == hvac_unit.id,
+        )
+        .order_by(HVACZone.id.asc())
+        .first()
+    )
+    if zone is None:
+        raise HTTPException(status_code=404, detail="No HVAC zone mapping found for this building.")
+
+    return hvac_unit, zone
+
+
+def _schedule_is_enabled(interval: ZoneScheduleInterval) -> bool:
+    return (interval.hvac_mode or SCHEDULE_ENABLED_MODE).lower() != SCHEDULE_OFF_MODE
+
+
+def _occurrence_entry(
+    schedule: ZoneSchedule,
+    interval: ZoneScheduleInterval,
+    priority: int,
+    enabled: bool,
+    setpoint: Any,
+    start_ts: datetime,
+    end_ts: datetime,
+) -> dict[str, Any]:
+    return {
+        "schedule_id": schedule.id,
+        "interval_id": interval.id,
+        "priority": priority,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "enabled": enabled,
+        "setpoint": setpoint,
+    }
+
+
+def _build_manual_override_occurrences(
+    schedule: ZoneSchedule,
+    interval: ZoneScheduleInterval,
+    priority: int,
+    enabled: bool,
+    setpoint: Any,
+    window_start: datetime,
+    window_end: datetime,
+) -> List[dict[str, Any]]:
+    start_utc = max(_ensure_utc(schedule.valid_from), window_start)
+    end_utc = min(_ensure_utc(schedule.valid_to), window_end)
+    if end_utc > start_utc:
+        return [_occurrence_entry(schedule, interval, priority, enabled, setpoint, start_utc, end_utc)]
+    return []
+
+
+def _build_recurring_day_occurrence(
+    schedule: ZoneSchedule,
+    interval: ZoneScheduleInterval,
+    priority: int,
+    enabled: bool,
+    setpoint: Any,
+    current_date: Any,
+    valid_from_local: Optional[datetime],
+    valid_to_local: Optional[datetime],
+    window_start_local: datetime,
+    window_end_local: datetime,
+) -> Optional[dict[str, Any]]:
+    if interval.day_of_week is not None and current_date.isoweekday() != interval.day_of_week:
+        return None
+    start_local = datetime.combine(current_date, interval.start_time, tzinfo=LOCAL_TZ)
+    end_local = datetime.combine(current_date, interval.end_time, tzinfo=LOCAL_TZ)
+    if end_local <= start_local:
+        end_local += timedelta(days=1)
+    if valid_from_local and end_local <= valid_from_local:
+        return None
+    if valid_to_local and start_local >= valid_to_local:
+        return None
+    bounded_start = max(start_local, valid_from_local or start_local, window_start_local)
+    bounded_end = min(end_local, valid_to_local or end_local, window_end_local)
+    if bounded_end <= bounded_start:
+        return None
+    return _occurrence_entry(
+        schedule, interval, priority, enabled, setpoint,
+        bounded_start.astimezone(timezone.utc),
+        bounded_end.astimezone(timezone.utc),
+    )
+
+
+def _build_recurring_occurrences(
+    schedule: ZoneSchedule,
+    interval: ZoneScheduleInterval,
+    priority: int,
+    enabled: bool,
+    setpoint: Any,
+    window_start: datetime,
+    window_end: datetime,
+) -> List[dict[str, Any]]:
+    window_start_local = window_start.astimezone(LOCAL_TZ)
+    window_end_local = window_end.astimezone(LOCAL_TZ)
+    valid_from_local = _ensure_local(schedule.valid_from) if schedule.valid_from else None
+    valid_to_local = _ensure_local(schedule.valid_to) if schedule.valid_to else None
+    current_date = (window_start_local - timedelta(days=1)).date()
+    end_date = (window_end_local + timedelta(days=1)).date()
+    occurrences: List[dict[str, Any]] = []
+    while current_date <= end_date:
+        entry = _build_recurring_day_occurrence(
+            schedule, interval, priority, enabled, setpoint,
+            current_date, valid_from_local, valid_to_local, window_start_local, window_end_local,
+        )
+        if entry is not None:
+            occurrences.append(entry)
+        current_date += timedelta(days=1)
+    return occurrences
+
+
+def _materialize_schedule_interval_occurrences(
+    schedule: ZoneSchedule,
+    interval: ZoneScheduleInterval,
+    window_start: datetime,
+    window_end: datetime,
+) -> List[dict[str, Any]]:
+    priority = SCHEDULE_PRIORITY.get(schedule.schedule_type, 99)
+    enabled = _schedule_is_enabled(interval)
+    setpoint = None if not enabled else interval.target_setpoint_c
+    if schedule.schedule_type == "manual_override" and schedule.valid_from and schedule.valid_to:
+        return _build_manual_override_occurrences(schedule, interval, priority, enabled, setpoint, window_start, window_end)
+    return _build_recurring_occurrences(schedule, interval, priority, enabled, setpoint, window_start, window_end)
+
+
+def _pick_active_schedule_occurrence(active_occurrences: List[dict[str, Any]]) -> dict[str, Any]:
+    return min(
+        active_occurrences,
+        key=lambda item: (item["priority"], -item["schedule_id"], -item["interval_id"]),
+    )
+
+
+def _merge_effective_schedule_ranges(
+    occurrences: List[dict[str, Any]],
+    window_start: datetime,
+    window_end: datetime,
+) -> List[dict[str, Any]]:
+    boundaries = {window_start, window_end}
+    for occurrence in occurrences:
+        boundaries.add(occurrence["start_ts"])
+        boundaries.add(occurrence["end_ts"])
+
+    merged: List[dict[str, Any]] = []
+    ordered_boundaries = sorted(boundaries)
+
+    for start_ts, end_ts in zip(ordered_boundaries, ordered_boundaries[1:]):
+        if end_ts <= start_ts:
+            continue
+        active_occurrences = [
+            occurrence
+            for occurrence in occurrences
+            if occurrence["start_ts"] < end_ts and occurrence["end_ts"] > start_ts
+        ]
+        if not active_occurrences:
+            continue
+
+        selected = _pick_active_schedule_occurrence(active_occurrences)
+        candidate = {
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "enabled": selected["enabled"],
+            "setpoint": selected["setpoint"],
+        }
+
+        if (
+            merged
+            and merged[-1]["enabled"] == candidate["enabled"]
+            and merged[-1]["setpoint"] == candidate["setpoint"]
+            and merged[-1]["end_ts"] == candidate["start_ts"]
+        ):
+            merged[-1]["end_ts"] = candidate["end_ts"]
+        else:
+            merged.append(candidate)
+
+    return merged
+
+
+def _fetch_effective_hvac_schedule_ranges(
+    db: Session,
+    building_id: int,
+    window_start: datetime,
+    window_end: datetime,
+    hvac_unit_id: Optional[int] = None,
+) -> List[dict[str, Any]]:
+    _, zone = _get_building_hvac_zone(db, building_id, hvac_unit_id)
+    schedule_rows = (
+        db.query(ZoneSchedule, ZoneScheduleInterval)
+        .join(ZoneScheduleInterval, ZoneScheduleInterval.schedule_id == ZoneSchedule.id)
+        .filter(ZoneSchedule.zone_id == zone.id)
+        .all()
+    )
+
+    occurrences: List[dict[str, Any]] = []
+    for schedule, interval in schedule_rows:
+        occurrences.extend(
+            _materialize_schedule_interval_occurrences(schedule, interval, window_start, window_end)
+        )
+
+    return _merge_effective_schedule_ranges(occurrences, window_start, window_end)
+
+
 def _fetch_schedule_rows(
     db: Session,
     building_id: int,
     ref_now: datetime,
     future_hours: float,
     hvac_unit_id: Optional[int] = None,
+    zone_id: Optional[int] = None,
 ) -> List[dict[str, Any]]:
-    window_start = ref_now.astimezone(timezone.utc).replace(tzinfo=None)
-    window_end = (ref_now + timedelta(hours=future_hours)).astimezone(timezone.utc).replace(tzinfo=None)
+    window_start = ref_now.astimezone(timezone.utc)
+    window_end = (ref_now + timedelta(hours=future_hours)).astimezone(timezone.utc)
+    _, zone = _get_building_hvac_zone(db, building_id, hvac_unit_id, zone_id)
 
-    if hvac_unit_id is None:
-        hvac_unit_id = _get_building_hvac_unit(db, building_id).id
-
-    stmt = text(
-        """
-        SELECT id, start_ts, end_ts, is_on, setpoint
-        FROM hvac_schedule_intervals
-        WHERE building_id = :building_id
-          AND hvac_unit_id = :hvac_unit_id
-          AND end_ts > :window_start
-          AND start_ts < :window_end
-        ORDER BY start_ts, id
-        """
+    schedule_rows = (
+        db.query(ZoneSchedule, ZoneScheduleInterval)
+        .join(ZoneScheduleInterval, ZoneScheduleInterval.schedule_id == ZoneSchedule.id)
+        .filter(
+            ZoneSchedule.zone_id == zone.id,
+            ZoneSchedule.schedule_type == "manual_override",
+            ZoneSchedule.name == SCHEDULE_DASHBOARD_OVERRIDE_NAME,
+            ZoneSchedule.valid_from.isnot(None),
+            ZoneSchedule.valid_to.isnot(None),
+            ZoneSchedule.valid_to > window_start,
+            ZoneSchedule.valid_from < window_end,
+        )
+        .order_by(ZoneSchedule.valid_from.asc(), ZoneSchedule.id.asc(), ZoneScheduleInterval.id.asc())
+        .all()
     )
-    rows = [
-        dict(row)
-        for row in db.execute(
-            stmt,
-            {
-                "building_id": building_id,
-                "hvac_unit_id": hvac_unit_id,
-                "window_start": window_start,
-                "window_end": window_end,
-            },
-        ).mappings().all()
-    ]
-
-    merged: List[dict[str, Any]] = []
-    for row in rows:
-        start_utc = row["start_ts"].replace(tzinfo=timezone.utc)
-        end_utc = row["end_ts"].replace(tzinfo=timezone.utc)
-        candidate = {
-            "id": row["id"],
-            "start_ts": start_utc,
-            "end_ts": end_utc,
-            "enabled": bool(row["is_on"]),
-            "setpoint": row.get("setpoint"),
-        }
-
-        if (
-            merged
-            and merged[-1]["enabled"] == candidate["enabled"]
-            and merged[-1]["end_ts"] == candidate["start_ts"]
-        ):
-            merged[-1]["end_ts"] = candidate["end_ts"]
-            if merged[-1]["enabled"] and merged[-1]["setpoint"] is None:
-                merged[-1]["setpoint"] = candidate["setpoint"]
-        else:
-            merged.append(candidate)
 
     return [
         {
-            "id": row["id"],
-            "start": _to_local_time_label(row["start_ts"]),
-            "end": _to_local_time_label(row["end_ts"]),
-            "enabled": row["enabled"],
-            "setpoint": row["setpoint"],
+            "id": schedule.id,
+            "start": _to_local_time_label(_ensure_utc(schedule.valid_from)),
+            "end": _to_local_time_label(_ensure_utc(schedule.valid_to)),
+            "enabled": _schedule_is_enabled(interval),
+            "setpoint": None if not _schedule_is_enabled(interval) else interval.target_setpoint_c,
+            "start_ts": _ensure_utc(schedule.valid_from),
+            "end_ts": _ensure_utc(schedule.valid_to),
         }
-        for row in merged
+        for schedule, interval in schedule_rows
     ]
 
 
 def _replace_schedule_rows(
     db: Session,
     building_id: int,
-    user_id: int,
     ref_now: datetime,
     future_hours: float,
     rows: List[DashboardScheduleRow],
+    hvac_unit_id: Optional[int] = None,
+    zone_id: Optional[int] = None,
 ) -> List[dict[str, Any]]:
-    hvac_unit = _get_building_hvac_unit(db, building_id)
-    window_start = ref_now.astimezone(timezone.utc).replace(tzinfo=None)
-    window_end = (ref_now + timedelta(hours=future_hours)).astimezone(timezone.utc).replace(tzinfo=None)
+    hvac_unit, zone = _get_building_hvac_zone(db, building_id, hvac_unit_id, zone_id)
+    window_start = ref_now.astimezone(timezone.utc)
+    window_end = (ref_now + timedelta(hours=future_hours)).astimezone(timezone.utc)
 
     materialized_rows = _normalize_materialized_schedule_rows(_materialize_schedule_rows_local(ref_now, rows))
     materialized_utc_ranges = [
         (
             row,
-            start_local.astimezone(timezone.utc).replace(tzinfo=None),
-            end_local.astimezone(timezone.utc).replace(tzinfo=None),
+            start_local.astimezone(timezone.utc),
+            end_local.astimezone(timezone.utc),
         )
         for row, start_local, end_local in materialized_rows
     ]
@@ -372,66 +602,48 @@ def _replace_schedule_rows(
         [window_end, *[end_ts for _, _, end_ts in materialized_utc_ranges]]
     )
 
-    db.execute(
-        text(
-            """
-            DELETE FROM hvac_schedule_intervals
-            WHERE building_id = :building_id
-              AND hvac_unit_id = :hvac_unit_id
-              AND end_ts > :window_start
-              AND start_ts < :window_end
-            """
-        ),
-        {
-            "building_id": building_id,
-            "hvac_unit_id": hvac_unit.id,
-            "window_start": delete_window_start,
-            "window_end": delete_window_end,
-        },
-    )
-
-    insert_stmt = text(
-        """
-        INSERT INTO hvac_schedule_intervals (
-            building_id,
-            hvac_unit_id,
-            start_ts,
-            end_ts,
-            is_on,
-            setpoint,
-            created_by_user_id
+    overlapping_override_schedules = (
+        db.query(ZoneSchedule)
+        .filter(
+            ZoneSchedule.zone_id == zone.id,
+            ZoneSchedule.schedule_type == "manual_override",
+            ZoneSchedule.name == SCHEDULE_DASHBOARD_OVERRIDE_NAME,
+            ZoneSchedule.valid_to.isnot(None),
+            ZoneSchedule.valid_from.isnot(None),
+            ZoneSchedule.valid_to > delete_window_start,
+            ZoneSchedule.valid_from < delete_window_end,
         )
-        VALUES (
-            :building_id,
-            :hvac_unit_id,
-            :start_ts,
-            :end_ts,
-            :is_on,
-            :setpoint,
-            :created_by_user_id
-        )
-        ON CONFLICT (hvac_unit_id, start_ts)
-        DO UPDATE SET
-            building_id = EXCLUDED.building_id,
-            end_ts = EXCLUDED.end_ts,
-            is_on = EXCLUDED.is_on,
-            setpoint = EXCLUDED.setpoint,
-            created_by_user_id = EXCLUDED.created_by_user_id
-        """
+        .all()
     )
+    for schedule in overlapping_override_schedules:
+        db.query(ZoneScheduleInterval).filter(
+            ZoneScheduleInterval.schedule_id == schedule.id
+        ).delete(synchronize_session=False)
+        db.delete(schedule)
 
     for row, start_ts, end_ts in materialized_utc_ranges:
-        db.execute(
-            insert_stmt,
-            {
-                "building_id": building_id,
-                "hvac_unit_id": hvac_unit.id,
-                "start_ts": start_ts,
-                "end_ts": end_ts,
-                "is_on": bool(row.enabled),
-                "setpoint": row.setpoint if row.enabled else None,
-                "created_by_user_id": user_id,
-            },
+        db_schedule = ZoneSchedule(
+            zone_id=zone.id,
+            schedule_type="manual_override",
+            name=SCHEDULE_DASHBOARD_OVERRIDE_NAME,
+            valid_from=start_ts,
+            valid_to=end_ts,
+        )
+        db.add(db_schedule)
+        db.flush()
+
+        start_local = start_ts.astimezone(LOCAL_TZ)
+        end_local = end_ts.astimezone(LOCAL_TZ)
+        db.add(
+            ZoneScheduleInterval(
+                schedule_id=db_schedule.id,
+                day_of_week=None,
+                start_time=start_local.timetz().replace(tzinfo=None),
+                end_time=end_local.timetz().replace(tzinfo=None),
+                target_setpoint_c=row.setpoint if row.enabled else None,
+                hvac_mode=SCHEDULE_ENABLED_MODE if row.enabled else SCHEDULE_OFF_MODE,
+                expected_occupancy=0,
+            )
         )
 
     db.commit()
@@ -574,30 +786,26 @@ def _attach_future_context(
     start_ts = future_rows[0]["ts"]
     end_ts = future_rows[-1]["ts"]
 
-    hvac_stmt = text(
-        """
-        SELECT start_ts, end_ts, is_on, setpoint
-        FROM hvac_schedule_intervals
-        WHERE building_id = :building_id
-          AND end_ts >= :start_ts
-          AND start_ts <= :end_ts
-        ORDER BY start_ts
-        """
-    )
     optimization_stmt = text(
         """
-        SELECT optimization_time, input_hash, output_hash, energy_saving_kwh,
-               baseline_consumption_kwh, optimized_consumption_kwh,
+        SELECT optimization_time, window_start, window_end, input_hash, output_hash,
+               energy_saving_kwh, baseline_consumption_kwh, optimized_consumption_kwh,
                environmental_points, notes, is_optimized
         FROM optimization_results
         WHERE building_id = :building_id
-          AND optimization_time <= :end_ts
+          AND COALESCE(window_start, optimization_time) <= :end_ts
+          AND :start_ts < COALESCE(window_end, optimization_time + interval '1 hour')
         ORDER BY optimization_time
         """
     )
 
-    hvac_rows = [dict(row) for row in db.execute(hvac_stmt, {"building_id": building_id, "start_ts": start_ts, "end_ts": end_ts}).mappings().all()]
-    optimization_rows = [dict(row) for row in db.execute(optimization_stmt, {"building_id": building_id, "end_ts": end_ts}).mappings().all()]
+    hvac_rows = _fetch_effective_hvac_schedule_ranges(
+        db,
+        building_id,
+        _ensure_utc(start_ts),
+        _ensure_utc(end_ts) + timedelta(minutes=5),
+    )
+    optimization_rows = [dict(row) for row in db.execute(optimization_stmt, {"building_id": building_id, "end_ts": end_ts, "start_ts": start_ts}).mappings().all()]
 
     enriched: List[dict[str, Any]] = []
     optimization_index = 0
@@ -621,6 +829,12 @@ def _get_active_hvac_rows(hvac_rows: List[dict[str, Any]], ts: datetime) -> List
     return [item for item in hvac_rows if item["start_ts"] <= ts < item["end_ts"]]
 
 
+def _optimization_active_at(opt: dict[str, Any], ts: datetime) -> bool:
+    window_start = opt.get("window_start") or opt.get("optimization_time")
+    window_end = opt.get("window_end") or (opt.get("optimization_time") or window_start) + timedelta(hours=1)
+    return window_start <= ts < window_end
+
+
 def _advance_latest_optimization(
     optimization_rows: List[dict[str, Any]],
     optimization_index: int,
@@ -629,10 +843,14 @@ def _advance_latest_optimization(
 ) -> tuple[Optional[dict[str, Any]], int]:
     while (
         optimization_index < len(optimization_rows)
-        and optimization_rows[optimization_index]["optimization_time"] <= ts
+        and (optimization_rows[optimization_index].get("window_start") or optimization_rows[optimization_index]["optimization_time"]) <= ts
     ):
         latest_optimization = optimization_rows[optimization_index]
         optimization_index += 1
+
+    if latest_optimization is not None and not _optimization_active_at(latest_optimization, ts):
+        latest_optimization = None
+
     return latest_optimization, optimization_index
 
 
@@ -709,7 +927,49 @@ def _fill_outdoor_temperatures(rows: List[dict[str, Any]], ref_now: datetime, du
     return values
 
 
-def _build_optimization_context(building_id: int, rows: List[dict[str, Any]], ref_now: datetime) -> DashboardOptimizationContext:
+def _find_setpoint_in_rows(rows: List[dict[str, Any]], ref_now: datetime) -> Optional[float]:
+    prev = next((r for r in reversed(rows) if r.get("ts") and r["ts"] <= ref_now and r.get("hvac_setpoint") is not None), None)
+    if prev is not None:
+        return prev["hvac_setpoint"]
+    nxt = next((r for r in rows if r.get("ts") and r["ts"] >= ref_now and r.get("hvac_setpoint") is not None), None)
+    return nxt["hvac_setpoint"] if nxt is not None else None
+
+
+def _resolve_setpoint(
+    current: dict[str, Any],
+    rows: List[dict[str, Any]],
+    ref_now: datetime,
+    schedule_setpoints: Optional[List[float]],
+) -> Optional[float]:
+    sp = current.get("hvac_setpoint")
+    if sp is None:
+        sp = _find_setpoint_in_rows(rows, ref_now)
+    if sp is not None:
+        return sp
+    return next((s for s in schedule_setpoints if s is not None), None) if schedule_setpoints else None
+
+
+def _collect_optimization_missing_fields(
+    current: dict[str, Any],
+    outdoor_temperatures: List[float],
+    fallback_setpoint: Optional[float],
+) -> List[str]:
+    missing: List[str] = []
+    if current.get("temperature") is None:
+        missing.append("temperature")
+    if fallback_setpoint is None:
+        missing.append("hvac_setpoint")
+    if not outdoor_temperatures or all(math.isclose(v, 0.0, abs_tol=ZERO_FLOAT_ABS_TOLERANCE) for v in outdoor_temperatures):
+        missing.append("outdoor_temperatures")
+    return missing
+
+
+def _build_optimization_context(
+    building_id: int,
+    rows: List[dict[str, Any]],
+    ref_now: datetime,
+    schedule_setpoints: Optional[List[float]] = None,
+) -> DashboardOptimizationContext:
     current = next((row for row in reversed(rows) if row.get("ts") and row["ts"] <= ref_now), None)
     if current is None:
         return DashboardOptimizationContext(
@@ -718,26 +978,9 @@ def _build_optimization_context(building_id: int, rows: List[dict[str, Any]], re
             duration=12,
             missing_fields=["temperature", "ts", "outdoor_temperatures", "hvac_setpoint"],
         )
-
     outdoor_temperatures = _fill_outdoor_temperatures(rows, ref_now, duration=12)
-    missing_fields: List[str] = []
-    if current.get("temperature") is None:
-        missing_fields.append("temperature")
-    fallback_setpoint = current.get("hvac_setpoint")
-    if fallback_setpoint is None:
-        previous_with_setpoint = next(
-            (row for row in reversed(rows) if row.get("ts") and row["ts"] <= ref_now and row.get("hvac_setpoint") is not None),
-            None,
-        )
-        fallback_setpoint = None if previous_with_setpoint is None else previous_with_setpoint.get("hvac_setpoint")
-    if fallback_setpoint is None:
-        missing_fields.append("hvac_setpoint")
-    if not outdoor_temperatures or all(
-        math.isclose(value, 0.0, abs_tol=ZERO_FLOAT_ABS_TOLERANCE)
-        for value in outdoor_temperatures
-    ):
-        missing_fields.append("outdoor_temperatures")
-
+    fallback_setpoint = _resolve_setpoint(current, rows, ref_now, schedule_setpoints)
+    missing_fields = _collect_optimization_missing_fields(current, outdoor_temperatures, fallback_setpoint)
     return DashboardOptimizationContext(
         building_id=building_id,
         starting_temperature=None if current.get("temperature") is None else float(current["temperature"]),
@@ -754,21 +997,54 @@ def _fetch_latest_optimization_result(
     db: Session,
     building_id: int,
     user_id: int,
+    ref_now: Optional[datetime] = None,
+    hvac_unit_id: Optional[int] = None,
 ) -> Optional[dict[str, Any]]:
+    effective_ref = ref_now or datetime.now(timezone.utc)
     stmt = text(
         """
-        SELECT output_data
+        SELECT output_data, window_start, window_end
         FROM optimization_results
         WHERE building_id = :building_id
           AND (user_id = :user_id OR user_id IS NULL)
           AND is_optimized IS TRUE
           AND output_data IS NOT NULL
-        ORDER BY id DESC
+          AND COALESCE(window_start, optimization_time) <= :ref_now
+          AND :ref_now < COALESCE(window_end, optimization_time + interval '1 hour')
+          AND (
+            :hvac_unit_id IS NULL
+            OR hvac_unit_id = :hvac_unit_id
+            OR hvac_unit_id IS NULL
+          )
+        ORDER BY
+          CASE WHEN hvac_unit_id IS NOT DISTINCT FROM :hvac_unit_id THEN 0 ELSE 1 END,
+          optimization_time DESC
         LIMIT 1
         """
     )
-    row = db.execute(stmt, {"building_id": building_id, "user_id": user_id}).mappings().first()
-    return None if row is None else row.get("output_data")
+    row = db.execute(stmt, {
+        "building_id": building_id,
+        "user_id": user_id,
+        "ref_now": effective_ref,
+        "hvac_unit_id": hvac_unit_id,
+    }).mappings().first()
+    if row is None:
+        return None
+    result = dict(row.get("output_data") or {})
+    ws = row.get("window_start")
+    we = row.get("window_end")
+    if ws is not None:
+        result["window_start"] = _ensure_utc(ws).isoformat()
+    if we is not None:
+        result["window_end"] = _ensure_utc(we).isoformat()
+    return result
+
+
+def _ensure_row_timestamps_utc(row: dict[str, Any]) -> dict[str, Any]:
+    for key, value in row.items():
+        if isinstance(value, datetime) and value.tzinfo is None:
+            row[key] = value.replace(tzinfo=timezone.utc)
+    return row
 
 
 def _fetch_efficiency_tool_rows(
@@ -777,6 +1053,7 @@ def _fetch_efficiency_tool_rows(
     ref_now: datetime,
     past_hours: float,
     future_hours: float,
+    hvac_unit_id: Optional[int] = None,
 ) -> List[dict[str, Any]]:
     stmt = text(
         """
@@ -785,7 +1062,8 @@ def _fetch_efficiency_tool_rows(
             :building_id,
             :ref_now,
             make_interval(hours => :past_hours),
-            make_interval(hours => :future_hours)
+            make_interval(hours => :future_hours),
+            :hvac_unit_id
         )
         ORDER BY ts
         """
@@ -797,9 +1075,10 @@ def _fetch_efficiency_tool_rows(
             "ref_now": ref_now,
             "past_hours": int(past_hours),
             "future_hours": int(future_hours),
+            "hvac_unit_id": hvac_unit_id,
         },
     )
-    return [dict(row) for row in result.mappings().all()]
+    return [_ensure_row_timestamps_utc(dict(row)) for row in result.mappings().all()]
 
 
 @router.get("/", 
@@ -843,9 +1122,8 @@ async def get_dashboard_data(
             HVACUnit.id,
             HVACUnit.building_id,
             Building.name.label('building_name'),
-            HVACUnit.central_unit,
-            HVACUnit.zone,
-            HVACUnit.room,
+            HVACUnit.name,
+            HVACUnit.unit_type,
             HVACUnit.device_key,
             func.count(Sensor.id).label('sensor_count')
         ).join(
@@ -859,9 +1137,8 @@ async def get_dashboard_data(
             HVACUnit.id,
             HVACUnit.building_id,
             Building.name,
-            HVACUnit.central_unit,
-            HVACUnit.zone,
-            HVACUnit.room,
+            HVACUnit.name,
+            HVACUnit.unit_type,
             HVACUnit.device_key,
         ).all()
 
@@ -870,9 +1147,8 @@ async def get_dashboard_data(
                 id=device.id,
                 building_id=device.building_id,
                 building_name=device.building_name,
-                central_unit=device.central_unit,
-                zone=device.zone,
-                room=device.room,
+                name=device.name,
+                unit_type=device.unit_type,
                 device_key=device.device_key,
                 sensor_count=device.sensor_count,
                 created_at=None
@@ -985,6 +1261,7 @@ async def get_dashboard_stats(
     response_model=DashboardTimeGridResponse,
     responses={
         403: {"description": FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION},
+        404: {"description": "No HVAC unit or zone found for this building."},
         500: {"description": "Internal server error."},
     },
 )
@@ -995,6 +1272,7 @@ async def get_dashboard_time_grid(
     ref_now: Annotated[Optional[datetime], Query(description="Reference time in ISO format")] = None,
     past_hours: Annotated[float, Query(description="Hours of past data to include", ge=0.5, le=24)] = 5,
     future_hours: Annotated[float, Query(description="Hours of future data to include", ge=0.5, le=24)] = 3,
+    unit_id: Annotated[Optional[int], Query(description="Filter to a specific HVAC unit")] = None,
 ):
     """
     Return efficiency-tool timeseries for a building using the dedicated DB function.
@@ -1013,6 +1291,7 @@ async def get_dashboard_time_grid(
             ref_now=effective_ref_now,
             past_hours=past_hours,
             future_hours=future_hours,
+            hvac_unit_id=unit_id,
         )
         current_row_dict = next(
             (
@@ -1023,11 +1302,22 @@ async def get_dashboard_time_grid(
             None,
         )
 
-        optimization_context = _build_optimization_context(building_id, rows, effective_ref_now)
+        try:
+            schedule_rows = _fetch_schedule_rows(
+                db, building_id, effective_ref_now, 3.0,
+                hvac_unit_id=unit_id, zone_id=None,
+            )
+            schedule_setpoints = [float(r["setpoint"]) for r in schedule_rows if r.get("setpoint") is not None]
+        except Exception:
+            schedule_setpoints = []
+
+        optimization_context = _build_optimization_context(building_id, rows, effective_ref_now, schedule_setpoints)
         latest_optimization_result = _fetch_latest_optimization_result(
             db,
             building_id,
             user_id,
+            ref_now=effective_ref_now,
+            hvac_unit_id=unit_id,
         )
 
         return DashboardTimeGridResponse(
@@ -1060,6 +1350,8 @@ async def get_dashboard_hvac_schedule(
     user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))],
     ref_now: Annotated[Optional[datetime], Query(description="Reference time in ISO format")] = None,
     future_hours: Annotated[float, Query(description="Hours of future schedule to include", ge=0.5, le=24)] = 3,
+    unit_id: Annotated[Optional[int], Query(description="Filter to a specific HVAC unit")] = None,
+    zone_id: Annotated[Optional[int], Query(description="Filter to a specific zone (overrides unit_id zone resolution)")] = None,
 ):
     try:
         user_id = resolve_registered_user_id(user, db)
@@ -1069,7 +1361,7 @@ async def get_dashboard_hvac_schedule(
             raise HTTPException(status_code=403, detail=FORBIDDEN_BUILDING_DETAIL)
 
         effective_ref_now = _floor_to_5min(ref_now or datetime.now(timezone.utc))
-        rows = _fetch_schedule_rows(db, building_id, effective_ref_now, future_hours)
+        rows = _fetch_schedule_rows(db, building_id, effective_ref_now, future_hours, hvac_unit_id=unit_id, zone_id=zone_id)
         return DashboardScheduleResponse(
             building_id=building_id,
             reference_time=effective_ref_now,
@@ -1096,6 +1388,8 @@ async def update_dashboard_hvac_schedule(
     payload: DashboardScheduleUpdateRequest,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_SCHEDULE_EDIT_ROLES))],
+    unit_id: Annotated[Optional[int], Query(description="Target a specific HVAC unit")] = None,
+    zone_id: Annotated[Optional[int], Query(description="Target a specific zone (overrides unit_id zone resolution)")] = None,
 ):
     try:
         user_id = resolve_registered_user_id(user, db)
@@ -1108,10 +1402,11 @@ async def update_dashboard_hvac_schedule(
         rows = _replace_schedule_rows(
             db=db,
             building_id=building_id,
-            user_id=user_id,
             ref_now=effective_ref_now,
             future_hours=payload.future_hours,
             rows=payload.rows,
+            hvac_unit_id=unit_id,
+            zone_id=zone_id,
         )
         return DashboardScheduleResponse(
             building_id=building_id,
@@ -1123,3 +1418,283 @@ async def update_dashboard_hvac_schedule(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update dashboard HVAC schedule: {str(e)}")
+
+
+# ──────────────────────────────────────────────
+# Zone listing endpoint
+# ──────────────────────────────────────────────
+
+class DashboardZone(BaseModel):
+    id: int
+    name: str
+    zone_type: Optional[str] = None
+
+
+class DashboardZonesResponse(BaseModel):
+    building_id: int
+    unit_id: Optional[int] = None
+    zones: List[DashboardZone]
+
+
+@router.get(
+    "/zones/{building_id}",
+    response_model=DashboardZonesResponse,
+    responses={
+        403: {"description": FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION},
+        500: {"description": "Internal server error."},
+    },
+)
+async def get_building_zones(
+    building_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))],
+    unit_id: Annotated[Optional[int], Query(description="Filter zones to those linked to this HVAC unit")] = None,
+):
+    """Return zones for a building, optionally filtered to a specific HVAC unit."""
+    try:
+        user_id = resolve_registered_user_id(user, db)
+        from utils.policies import has_permission
+
+        if not has_permission(user_id, BUILDING_RESOURCE_TYPE, building_id, db):
+            raise HTTPException(status_code=403, detail=FORBIDDEN_BUILDING_DETAIL)
+
+        query = db.query(HVACZone).filter(HVACZone.building_id == building_id)
+        if unit_id is not None:
+            query = (
+                query
+                .join(ZoneHVACUnit, ZoneHVACUnit.zone_id == HVACZone.id)
+                .filter(ZoneHVACUnit.hvac_unit_id == unit_id)
+            )
+        zones = query.order_by(HVACZone.id.asc()).all()
+
+        return DashboardZonesResponse(
+            building_id=building_id,
+            unit_id=unit_id,
+            zones=[DashboardZone(id=z.id, name=z.name, zone_type=z.zone_type) for z in zones],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load zones: {str(e)}")
+
+
+# ──────────────────────────────────────────────
+# Topology endpoint
+# ──────────────────────────────────────────────
+
+class TopologySensor(BaseModel):
+    id: int
+    name: str
+    sensor_type: str
+    unit: Optional[str] = None
+    value: Optional[float] = None
+    value_text: Optional[str] = None
+    value_bool: Optional[bool] = None
+    last_seen: Optional[str] = None
+    hvac_unit_id: Optional[int] = None
+    zone_id: Optional[int] = None
+    payload_path: Optional[str] = None
+    is_controllable: bool = False
+    command_payload_template: Optional[str] = None
+
+
+class TopologyZone(BaseModel):
+    id: int
+    name: str
+    hvac_is_on: bool = False
+    temperature: Optional[float] = None
+    setpoint: Optional[float] = None
+    thermostat_id: Optional[int] = None
+    thermostat_name: Optional[str] = None
+    is_controllable: bool = False
+    external_bms_id: Optional[str] = None
+    sensors: List[TopologySensor] = []
+
+
+class TopologyUnit(BaseModel):
+    id: int
+    name: str
+    unit_type: str
+    connection_status: Optional[str] = None
+    zones: List[TopologyZone] = []
+
+
+class TopologyResponse(BaseModel):
+    building_id: int
+    units: List[TopologyUnit]
+
+
+def _fetch_topology(db: Session, building_id: int) -> List[dict]:
+    rows = db.execute(
+        text("""
+            WITH zone_primary_thermostat AS (
+                SELECT DISTINCT ON (zt.zone_id)
+                    zt.zone_id,
+                    th.id               AS thermostat_id,
+                    th.name             AS thermostat_name,
+                    th.is_controllable,
+                    th.external_bms_id
+                FROM zone_thermostats zt
+                JOIN thermostats th ON th.id = zt.thermostat_id
+                ORDER BY zt.zone_id, (zt.role = 'primary') DESC, zt.thermostat_id
+            ),
+            latest_zone_state AS (
+                SELECT DISTINCT ON (zone_id)
+                    zone_id,
+                    hvac_status,
+                    measured_temp_c,
+                    setpoint_c,
+                    ts
+                FROM zone_states
+                WHERE ts <= NOW()
+                ORDER BY zone_id, ts DESC
+            ),
+            latest_sensor_value AS (
+                SELECT DISTINCT ON (sensor_id)
+                    sensor_id,
+                    value,
+                    value_text,
+                    value_bool,
+                    ts
+                FROM sensor_data
+                WHERE ts <= NOW()
+                ORDER BY sensor_id, ts DESC
+            )
+            SELECT
+                u.id                    AS unit_id,
+                u.name                  AS unit_name,
+                u.unit_type,
+                u.connection_status,
+                z.id                    AS zone_id,
+                z.name                  AS zone_name,
+                lzs.hvac_status,
+                lzs.measured_temp_c     AS temperature,
+                lzs.setpoint_c          AS setpoint,
+                zpt.thermostat_id       AS zone_thermostat_id,
+                zpt.thermostat_name     AS zone_thermostat_name,
+                COALESCE(zpt.is_controllable, false) AS zone_is_controllable,
+                zpt.external_bms_id     AS zone_thermostat_bms_id,
+                s.id                    AS sensor_id,
+                s.name                  AS sensor_name,
+                s.sensor_type,
+                s.unit                  AS sensor_unit,
+                s.hvac_unit_id                  AS sensor_hvac_unit_id,
+                s.payload_path                  AS sensor_payload_path,
+                s.is_controllable               AS sensor_is_controllable,
+                s.command_payload_template      AS sensor_command_payload_template,
+                lsv.value               AS sensor_value,
+                lsv.value_text          AS sensor_value_text,
+                lsv.value_bool          AS sensor_value_bool,
+                lsv.ts                  AS sensor_last_seen
+            FROM hvac_units u
+            LEFT JOIN zone_hvac_units zhu ON zhu.hvac_unit_id = u.id
+            LEFT JOIN hvac_zones z        ON z.id = zhu.zone_id
+            LEFT JOIN latest_zone_state lzs      ON lzs.zone_id = z.id
+            LEFT JOIN zone_primary_thermostat zpt ON zpt.zone_id = z.id
+            LEFT JOIN sensors s                   ON s.zone_id = z.id
+            LEFT JOIN thermostats th      ON th.id = s.thermostat_id
+            LEFT JOIN latest_sensor_value lsv ON lsv.sensor_id = s.id
+            WHERE u.building_id = :building_id
+            ORDER BY u.id, z.id, s.id
+        """),
+        {"building_id": building_id},
+    )
+    return [dict(r) for r in rows.mappings().all()]
+
+
+def _topology_zone_entry(row: dict) -> dict:
+    return {
+        "id": row["zone_id"],
+        "name": row["zone_name"],
+        "hvac_is_on": (row["hvac_status"] or "").lower() not in ("off", ""),
+        "temperature": float(row["temperature"]) if row["temperature"] is not None else None,
+        "setpoint": float(row["setpoint"]) if row["setpoint"] is not None else None,
+        "thermostat_id": row["zone_thermostat_id"],
+        "thermostat_name": row["zone_thermostat_name"],
+        "is_controllable": bool(row["zone_is_controllable"]),
+        "external_bms_id": row["zone_thermostat_bms_id"],
+        "sensors": {},
+    }
+
+
+def _topology_sensor_entry(row: dict, zid: int) -> dict:
+    return {
+        "id": row["sensor_id"],
+        "name": row["sensor_name"],
+        "sensor_type": row["sensor_type"],
+        "unit": row["sensor_unit"],
+        "hvac_unit_id": row["sensor_hvac_unit_id"],
+        "zone_id": zid,
+        "payload_path": row["sensor_payload_path"],
+        "is_controllable": bool(row["sensor_is_controllable"]),
+        "command_payload_template": row["sensor_command_payload_template"],
+        "value": float(row["sensor_value"]) if row["sensor_value"] is not None else None,
+        "value_text": row["sensor_value_text"],
+        "value_bool": bool(row["sensor_value_bool"]) if row["sensor_value_bool"] is not None else None,
+        "last_seen": row["sensor_last_seen"].isoformat() if row["sensor_last_seen"] else None,
+    }
+
+
+def _assemble_topology_units(units: dict) -> List[TopologyUnit]:
+    unit_list = []
+    for u in units.values():
+        zone_list = []
+        for z in u["zones"].values():
+            sensor_list = [TopologySensor(**s) for s in z["sensors"].values()]
+            zone_is_controllable = any(s.is_controllable for s in sensor_list)
+            zone_list.append(TopologyZone(
+                **{k: v for k, v in z.items() if k not in ("sensors", "is_controllable")},
+                is_controllable=zone_is_controllable,
+                sensors=sensor_list,
+            ))
+        unit_list.append(TopologyUnit(
+            **{k: v for k, v in u.items() if k != "zones"},
+            zones=zone_list,
+        ))
+    return unit_list
+
+
+def _build_topology_response(building_id: int, rows: List[dict]) -> TopologyResponse:
+    units: dict = {}
+    for row in rows:
+        uid = row["unit_id"]
+        if uid not in units:
+            units[uid] = {"id": uid, "name": row["unit_name"], "unit_type": row["unit_type"] or "unknown", "connection_status": row["connection_status"], "zones": {}}
+        if row["zone_id"] is None:
+            continue
+        zid = row["zone_id"]
+        zones = units[uid]["zones"]
+        if zid not in zones:
+            zones[zid] = _topology_zone_entry(row)
+        if row["sensor_id"] is None:
+            continue
+        sid = row["sensor_id"]
+        if sid not in zones[zid]["sensors"]:
+            zones[zid]["sensors"][sid] = _topology_sensor_entry(row, zid)
+    return TopologyResponse(building_id=building_id, units=_assemble_topology_units(units))
+
+
+@router.get(
+    "/topology/{building_id}",
+    response_model=TopologyResponse,
+    responses={
+        403: {"description": FORBIDDEN_BUILDING_RESPONSE_DESCRIPTION},
+        500: {"description": "Internal server error."},
+    },
+)
+async def get_building_topology(
+    building_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(DASHBOARD_ALLOWED_ROLES))],
+):
+    try:
+        user_id = resolve_registered_user_id(user, db)
+        from utils.policies import has_permission
+        if not has_permission(user_id, BUILDING_RESOURCE_TYPE, building_id, db):
+            raise HTTPException(status_code=403, detail=FORBIDDEN_BUILDING_DETAIL)
+        rows = _fetch_topology(db, building_id)
+        return _build_topology_response(building_id, rows)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load topology: {str(e)}")

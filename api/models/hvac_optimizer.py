@@ -110,14 +110,13 @@ class HVACOptimizer:
         finally:
             db.close()
     
-    def train_full_pipeline(self, csv_path: str, knowledge_id: int = 1) -> Dict[str, Any]:
+    def train_full_pipeline(self, csv_path: str) -> Dict[str, Any]:
         """
         Complete training pipeline including data preprocessing, model training, and database storage.
-        
+
         Args:
             csv_path: Path to the training CSV file
-            knowledge_id: ID of the knowledge record to associate with
-            
+
         Returns:
             Dict containing training results and metrics
         """
@@ -168,7 +167,6 @@ class HVACOptimizer:
                 model_type=self.MODEL_TYPE_HVAC_OPTIMIZER,
                 latitude=self.latitude,
                 longitude=self.longitude,
-                knowledge_id=knowledge_id,
                 training_data_hash=data_hash,
                 model_data={
                     'a_coefficient': float(a_coeff),

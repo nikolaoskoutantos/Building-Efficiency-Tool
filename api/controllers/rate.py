@@ -23,13 +23,28 @@ router = APIRouter(
 # Get encryption key from environment
 RATING_ENCRYPTION_KEY = os.getenv("RATING_ENCRYPTION_KEY", "default_key_change_in_production")
 
+# Valid rating types
+RATING_TYPE_THERMAL = "thermal_comfort"   # Occupant: 1–10 cold → hot
+RATING_TYPE_SERVICE = "service_quality"   # Manager/Admin: 1–5 stars
+
 # Pydantic schemas
 class RateBase(BaseModel):
     service_id: int
-    rating: float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
+    rating: float = Field(..., ge=1.0, le=10.0, description="1-10 for thermal comfort, 1-5 for service quality")
+    rating_type: str = Field(RATING_TYPE_SERVICE, description="'thermal_comfort' or 'service_quality'")
+
+    @property
+    def max_rating(self):
+        return 10.0 if self.rating_type == RATING_TYPE_THERMAL else 5.0
 
 class RateCreate(RateBase):
     feedback: Optional[str] = None
+
+    def validate_rating_range(self):
+        if self.rating_type == RATING_TYPE_THERMAL and self.rating > 10.0:
+            raise ValueError("Thermal comfort rating must be between 1 and 10")
+        if self.rating_type == RATING_TYPE_SERVICE and self.rating > 5.0:
+            raise ValueError("Service quality rating must be between 1 and 5")
 
 class RateRead(RateBase):
     id: int
@@ -65,54 +80,64 @@ def submit_user_rating(
 ):
     """
     Submit or update a rating for a service with encrypted wallet.
-    Each wallet can only have one rating per service (upsert).
+    Occupants submit thermal_comfort (1-10), managers/admins submit service_quality (1-5).
+    Each wallet can only have one rating per (service, rating_type).
     """
     try:
-        # Get current user from your existing auth system
         current_user = get_current_user(request)
         wallet_address = current_user.get("wallet")
         _require_registered_user(user, db)
         if not wallet_address:
             raise HTTPException(status_code=400, detail="Wallet address required for rating")
-        
+
+        # Enforce role ↔ rating_type consistency
+        user_role = user.get("role", "")
+        if user_role == "OCCUPANT" and rate.rating_type != RATING_TYPE_THERMAL:
+            raise HTTPException(status_code=403, detail="Occupants can only submit thermal comfort ratings")
+        if user_role in ("BUILDING_MANAGER", "ADMIN") and rate.rating_type != RATING_TYPE_SERVICE:
+            raise HTTPException(status_code=403, detail="Managers/Admins can only submit service quality ratings")
+
+        # Enforce value range per type
+        rate.validate_rating_range()
+
         from sqlalchemy import text
-        
-        # First encrypt the wallet address using deterministic encryption
-        encrypt_result = db.execute(text("SELECT encrypt_wallet(:wallet, :key) as encrypted_wallet"), 
+
+        encrypt_result = db.execute(text("SELECT encrypt_wallet(:wallet, :key) as encrypted_wallet"),
                                   {"wallet": wallet_address, "key": RATING_ENCRYPTION_KEY})
         encrypted_wallet = encrypt_result.fetchone()[0]
-        
-        # Check if rating already exists for this service and encrypted wallet
+
+        # Upsert key: one rating per (service, wallet, rating_type)
         existing_result = db.execute(text("""
-            SELECT id FROM rates 
-            WHERE service_id = :service_id 
-            AND encrypted_wallet = :encrypted_wallet
+            SELECT id FROM rates
+            WHERE service_id = :service_id
+              AND encrypted_wallet = :encrypted_wallet
+              AND rating_type = :rating_type
         """), {
             "service_id": rate.service_id,
-            "encrypted_wallet": encrypted_wallet
+            "encrypted_wallet": encrypted_wallet,
+            "rating_type": rate.rating_type,
         })
-        
+
         existing_row = existing_result.fetchone()
-        
+
         if existing_row:
-            # UPDATE existing rating
             existing_id = existing_row[0]
             update_result = db.execute(text("""
-                UPDATE rates 
+                UPDATE rates
                 SET rating = :rating,
-                    feedback = COALESCE(:feedback, feedback),
+                    feedback = :feedback,
                     updated_at = NOW()
                 WHERE id = :rate_id
-                RETURNING id, service_id, rating, feedback, created_at, updated_at
+                RETURNING id, service_id, rating, rating_type, feedback, created_at, updated_at
             """), {
                 "rating": rate.rating,
                 "feedback": rate.feedback,
-                "rate_id": existing_id
+                "rate_id": existing_id,
             })
-            
+
             result = update_result.fetchone()
             db.commit()
-            
+
             return {
                 "success": True,
                 "message": "Rating updated successfully",
@@ -121,27 +146,28 @@ def submit_user_rating(
                     "rate_id": result[0],
                     "service_id": result[1],
                     "rating": float(result[2]),
-                    "feedback": result[3],
-                    "created_at": result[4].isoformat(),
-                    "updated_at": result[5].isoformat()
+                    "rating_type": result[3],
+                    "feedback": result[4],
+                    "created_at": result[5].isoformat(),
+                    "updated_at": result[6].isoformat(),
                 }
             }
         else:
-            # INSERT new rating
             insert_result = db.execute(text("""
-                INSERT INTO rates (service_id, encrypted_wallet, rating, feedback, created_at, updated_at)
-                VALUES (:service_id, :encrypted_wallet, :rating, :feedback, NOW(), NOW())
-                RETURNING id, service_id, rating, feedback, created_at, updated_at
+                INSERT INTO rates (service_id, encrypted_wallet, rating, rating_type, feedback, created_at, updated_at)
+                VALUES (:service_id, :encrypted_wallet, :rating, :rating_type, :feedback, NOW(), NOW())
+                RETURNING id, service_id, rating, rating_type, feedback, created_at, updated_at
             """), {
                 "service_id": rate.service_id,
                 "encrypted_wallet": encrypted_wallet,
                 "rating": rate.rating,
-                "feedback": rate.feedback
+                "rating_type": rate.rating_type,
+                "feedback": rate.feedback,
             })
-            
+
             result = insert_result.fetchone()
             db.commit()
-            
+
             return {
                 "success": True,
                 "message": "Rating submitted successfully",
@@ -150,12 +176,13 @@ def submit_user_rating(
                     "rate_id": result[0],
                     "service_id": result[1],
                     "rating": float(result[2]),
-                    "feedback": result[3],
-                    "created_at": result[4].isoformat(),
-                    "updated_at": result[5].isoformat()
+                    "rating_type": result[3],
+                    "feedback": result[4],
+                    "created_at": result[5].isoformat(),
+                    "updated_at": result[6].isoformat(),
                 }
             }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -361,7 +388,7 @@ def delete_rate(
 class RateTestCreate(BaseModel):
     service_id: int
     wallet_address: str
-    rating: float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
+    rating: float = Field(..., ge=1.0, le=10.0, description="Thermal comfort rating 1 (cold) to 10 (hot)")
     feedback: Optional[str] = None
 
 @router.post(
@@ -407,7 +434,7 @@ def test_upsert_functionality(
             update_result = db.execute(text("""
                 UPDATE rates 
                 SET rating = :rating,
-                    feedback = COALESCE(:feedback, feedback),
+                    feedback = :feedback,
                     updated_at = NOW()
                 WHERE id = :rate_id
                 RETURNING id, service_id, rating, feedback, created_at, updated_at

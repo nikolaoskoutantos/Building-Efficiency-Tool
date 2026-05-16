@@ -9,7 +9,8 @@ export const useAuthStore = defineStore('auth', {
     isAuthenticated: false,
     userProfile: null,
     sessionToken: null,
-    jwtToken: null, // Add JWT token storage
+    jwtToken: null,
+    refreshToken: null,
     walletType: null,
     balance: null,
     ensName: null,
@@ -25,6 +26,85 @@ export const useAuthStore = defineStore('auth', {
   }),
 
   actions: {
+    registerJwtExpiryHandler(onExpire) {
+      this._jwtExpiryHandler = onExpire
+      this.scheduleJwtExpiryRedirect()
+    },
+
+    clearJwtExpiryWatcher() {
+      if (this._jwtExpiryTimeout) {
+        clearTimeout(this._jwtExpiryTimeout)
+        this._jwtExpiryTimeout = null
+      }
+    },
+
+    scheduleJwtExpiryRedirect() {
+      this.clearJwtExpiryWatcher()
+
+      const remainingMs = this.getJwtRemainingMs()
+      if (remainingMs === null) {
+        return
+      }
+
+      if (remainingMs <= 0) {
+        queueMicrotask(() => {
+          void this.handleJwtExpired()
+        })
+        return
+      }
+
+      this._jwtExpiryTimeout = setTimeout(() => {
+        void this.handleJwtExpired()
+      }, remainingMs + 250)
+    },
+
+    async handleJwtExpired() {
+      this.clearJwtExpiryWatcher()
+
+      const remainingMs = this.getJwtRemainingMs()
+      if (remainingMs === null) {
+        return
+      }
+
+      if (remainingMs > 0) {
+        this.scheduleJwtExpiryRedirect()
+        return
+      }
+
+      console.log('⏰ JWT expired, attempting refresh before redirecting to login...')
+      const refreshed = await this.refreshAccessToken()
+      if (refreshed) {
+        this.scheduleJwtExpiryRedirect()
+        return
+      }
+
+      this.forceResetState()
+      if (typeof this._jwtExpiryHandler === 'function') {
+        await this._jwtExpiryHandler()
+      }
+    },
+
+    parseJwtPayload(token) {
+      if (!token || typeof token !== 'string') {
+        return null
+      }
+
+      try {
+        const parts = token.split('.')
+        if (parts.length < 2) {
+          return null
+        }
+
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+        const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=')
+        const decoded = atob(padded)
+        return JSON.parse(decoded)
+      } catch (error) {
+        console.warn('⚠️ Failed to parse JWT payload:', error)
+        return null
+      }
+    },
+
     setWalletData({ address, chainId, walletType, balance, ensName, avatar }) {
       this.walletAddress = address
       this.chainId = chainId
@@ -122,6 +202,9 @@ export const useAuthStore = defineStore('auth', {
           if (result.token) {
             console.log('🔑 JWT token received, storing...')
             this.setJwtToken(result.token)
+            if (result.refresh_token) {
+              this.setRefreshToken(result.refresh_token)
+            }
           } else {
             console.log('🍪 Session-based authentication (no JWT token)')
             // Clear any existing JWT token since we're using session-based auth
@@ -229,6 +312,8 @@ export const useAuthStore = defineStore('auth', {
         localStorage.removeItem('jwt_token')
         console.log('🗑️ JWT token removed from localStorage')
       }
+
+      this.scheduleJwtExpiryRedirect()
     },
 
     getJwtToken() {
@@ -236,10 +321,33 @@ export const useAuthStore = defineStore('auth', {
       return this.jwtToken || localStorage.getItem('jwt_token')
     },
 
+    getJwtExpiryMs() {
+      const token = this.getJwtToken()
+      const payload = this.parseJwtPayload(token)
+      const exp = payload?.exp
+
+      if (!exp || typeof exp !== 'number') {
+        return null
+      }
+
+      return exp * 1000
+    },
+
+    getJwtRemainingMs(nowMs = Date.now()) {
+      const expiryMs = this.getJwtExpiryMs()
+      if (!expiryMs) {
+        return null
+      }
+
+      return Math.max(0, expiryMs - nowMs)
+    },
+
     clearJwtToken() {
       console.log('🗑️ Clearing JWT token and localStorage...')
+      this.clearJwtExpiryWatcher()
       this.jwtToken = null
       localStorage.removeItem('jwt_token')
+      localStorage.removeItem('refresh_token')
       
       // Also clear any other auth-related localStorage items
       localStorage.removeItem('auth_user')
@@ -252,19 +360,77 @@ export const useAuthStore = defineStore('auth', {
       console.log('✅ JWT token and storage cleared')
     },
 
+    setRefreshToken(token) {
+      this.refreshToken = token
+      if (token) {
+        localStorage.setItem('refresh_token', token)
+      } else {
+        localStorage.removeItem('refresh_token')
+      }
+    },
+
+    getRefreshToken() {
+      return this.refreshToken || localStorage.getItem('refresh_token')
+    },
+
+    clearRefreshToken() {
+      this.refreshToken = null
+      localStorage.removeItem('refresh_token')
+    },
+
+    async refreshAccessToken() {
+      const refreshToken = this.getRefreshToken()
+      if (!refreshToken) {
+        console.log('❌ No refresh token available')
+        this.isAuthenticated = false
+        this.userProfile = null
+        return false
+      }
+      try {
+        const response = await fetch(buildApiUrl('/auth/refresh'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ refresh_token: refreshToken })
+        })
+        if (response.ok) {
+          const result = await response.json()
+          if (result.token) this.setJwtToken(result.token)
+          if (result.refresh_token) this.setRefreshToken(result.refresh_token)
+          console.log('✅ Token refreshed successfully')
+          return true
+        } else {
+          console.log('❌ Token refresh failed, status:', response.status)
+          this.clearJwtToken()
+          this.clearRefreshToken()
+          this.isAuthenticated = false
+          this.userProfile = null
+          return false
+        }
+      } catch (error) {
+        console.error('Token refresh error:', error)
+        return false
+      }
+    },
+
     // Initialize JWT token from localStorage on app start
     async initializeAuth() {
       try {
+        const storedRefreshToken = localStorage.getItem('refresh_token')
+        if (storedRefreshToken) this.refreshToken = storedRefreshToken
+
         const storedToken = localStorage.getItem('jwt_token')
         if (storedToken) {
           this.jwtToken = storedToken
-          // Validate token with backend and wait for result
           const isValid = await this.validateJwtToken()
           if (isValid) {
             console.log('✅ JWT token restored and validated on app start')
           } else {
             console.log('❌ Stored JWT token was invalid, cleared')
           }
+        } else if (storedRefreshToken) {
+          console.log('🔄 No access token, attempting refresh...')
+          await this.refreshAccessToken()
         } else {
           console.log('ℹ️ No stored JWT token found')
         }
@@ -299,11 +465,16 @@ export const useAuthStore = defineStore('auth', {
           this.isAuthenticated = true
           this.userProfile = userData
           this.walletAddress = userData.wallet || userData.user
+          this.scheduleJwtExpiryRedirect()
           
           return true
+        } else if (response.status === 401) {
+          console.log('⚠️ JWT token expired, attempting refresh...')
+          const refreshed = await this.refreshAccessToken()
+          if (refreshed) return await this.validateJwtToken()
+          return false
         } else {
           console.log('❌ JWT token invalid, status:', response.status)
-          // Token is invalid, clear it
           this.clearJwtToken()
           this.isAuthenticated = false
           this.userProfile = null
@@ -334,6 +505,7 @@ export const useAuthStore = defineStore('auth', {
     // Force clear all authentication data (nuclear option)
     forceLogout() {
       console.log('💥 Force logout - clearing ALL auth data...')
+      this.clearJwtExpiryWatcher()
       
       // Clear all possible storage locations
       localStorage.clear() // Nuclear option - clears everything
@@ -348,6 +520,7 @@ export const useAuthStore = defineStore('auth', {
     // Force reset all auth state - useful for logout or error conditions
     forceResetState() {
       console.log('🔄 Force resetting all auth state...')
+      this.clearJwtExpiryWatcher()
       this.isAuthenticated = false
       this.isVerifying = false
       this.walletAddress = null
@@ -379,6 +552,11 @@ export const useAuthStore = defineStore('auth', {
     // Check if user is fully authenticated (both flags set)
     isFullyAuthenticated(state) {
       return state.isAuthenticated && !!state.userProfile
+    },
+
+    isJwtExpiringSoon() {
+      const remainingMs = this.getJwtRemainingMs()
+      return remainingMs !== null && remainingMs <= 5 * 60 * 1000
     },
   }
 })

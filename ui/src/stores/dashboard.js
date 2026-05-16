@@ -9,7 +9,16 @@ export const useDashboardStore = defineStore('dashboard', {
     lastLoaded: null,
     loadedForUserKey: null,
     error: null,
-    
+
+    // Active context — set by the building/device/zone selectors
+    selectedBuildingId: null,
+    selectedDeviceId: null,
+    selectedZoneId: null,
+
+    // Zones for the currently selected device (loaded on device change)
+    zones: [],
+    zonesLoading: false,
+
     // Core data
     devices: [],
     buildings: [],
@@ -34,6 +43,7 @@ export const useDashboardStore = defineStore('dashboard', {
       loading: false,
       error: null,
       loadedBuildingId: null,
+      loadedUnitId: null,
       lastLoaded: null
     },
     stats: {
@@ -67,6 +77,51 @@ export const useDashboardStore = defineStore('dashboard', {
         return state.buildings.find(building => building.id === state.userSettings.default_building_id)
       }
       return state.buildings.length > 0 ? state.buildings[0] : null
+    },
+
+    // Active building — respects explicit user selection, falls back to default
+    activeBuilding: (state) => {
+      if (state.selectedBuildingId) {
+        return state.buildings.find(b => b.id === state.selectedBuildingId) ?? null
+      }
+      if (state.userSettings.default_building_id) {
+        return state.buildings.find(b => b.id === state.userSettings.default_building_id) ?? null
+      }
+      return state.buildings.length > 0 ? state.buildings[0] : null
+    },
+
+    // Devices that belong to the active building
+    activeBuildingDevices: (state) => {
+      const buildingId = state.selectedBuildingId ||
+        state.userSettings.default_building_id ||
+        (state.buildings[0]?.id ?? null)
+      if (!buildingId) return state.devices
+      return state.devices.filter(d => d.building_id === buildingId)
+    },
+
+    // Active zone — respects explicit selection, falls back to first zone loaded for the unit
+    activeZone: (state) => {
+      if (state.selectedZoneId) {
+        return state.zones.find(z => z.id === state.selectedZoneId) ?? (state.zones[0] ?? null)
+      }
+      return state.zones[0] ?? null
+    },
+
+    // Only show the zone selector when the unit has more than one zone
+    showZoneSelector: (state) => state.zones.length > 1,
+
+    // Active device — respects explicit selection, falls back to first device of active building
+    activeDevice: (state) => {
+      const buildingId = state.selectedBuildingId ||
+        state.userSettings.default_building_id ||
+        (state.buildings[0]?.id ?? null)
+      const buildingDevices = buildingId
+        ? state.devices.filter(d => d.building_id === buildingId)
+        : state.devices
+      if (state.selectedDeviceId) {
+        return buildingDevices.find(d => d.id === state.selectedDeviceId) ?? (buildingDevices[0] ?? null)
+      }
+      return buildingDevices[0] ?? null
     },
     
     // Check if data is fresh (loaded within last 5 minutes)
@@ -208,11 +263,12 @@ export const useDashboardStore = defineStore('dashboard', {
         loading: false,
         error: null,
         loadedBuildingId: null,
+        loadedUnitId: null,
         lastLoaded: null
       }
     },
 
-    async loadEfficiencyTimeGrid(buildingId, { force = false } = {}) {
+    async loadEfficiencyTimeGrid(buildingId, { force = false, unitId = null } = {}) {
       if (!buildingId) {
         this.clearEfficiencyTimeGrid()
         return null
@@ -220,6 +276,7 @@ export const useDashboardStore = defineStore('dashboard', {
 
       const hasCachedRows =
         this.efficiencyTimeGrid.loadedBuildingId === buildingId &&
+        this.efficiencyTimeGrid.loadedUnitId === unitId &&
         Array.isArray(this.efficiencyTimeGrid.rows) &&
         this.efficiencyTimeGrid.rows.length > 0
 
@@ -240,7 +297,8 @@ export const useDashboardStore = defineStore('dashboard', {
       }
 
       try {
-        const response = await fetch(buildApiUrl(`/dashboard/time-grid/${buildingId}`), {
+        const query = unitId ? `?unit_id=${unitId}` : ''
+        const response = await fetch(buildApiUrl(`/dashboard/time-grid/${buildingId}${query}`), {
           method: 'GET',
           headers: this.getAuthHeaders(),
           credentials: 'include',
@@ -252,6 +310,7 @@ export const useDashboardStore = defineStore('dashboard', {
 
         const payload = await response.json()
         this.setEfficiencyTimeGrid(payload, buildingId)
+        this.efficiencyTimeGrid.loadedUnitId = unitId
         return payload
       } catch (error) {
         this.efficiencyTimeGrid = {
@@ -264,6 +323,52 @@ export const useDashboardStore = defineStore('dashboard', {
           ...this.efficiencyTimeGrid,
           loading: false,
         }
+      }
+    },
+
+    // Select a building — resets device + zone selection
+    setSelectedBuilding(buildingId) {
+      this.selectedBuildingId = buildingId
+      this.selectedDeviceId = null
+      this.selectedZoneId = null
+      this.zones = []
+      this.clearEfficiencyTimeGrid()
+    },
+
+    // Select a device — resets zone selection, zones will be reloaded
+    setSelectedDevice(deviceId) {
+      this.selectedDeviceId = deviceId
+      this.selectedZoneId = null
+      this.zones = []
+    },
+
+    // Select a zone within the active device
+    setSelectedZone(zoneId) {
+      this.selectedZoneId = zoneId
+    },
+
+    // Load zones for the active unit (called after device selection)
+    async loadZonesForUnit(buildingId, unitId) {
+      this.zonesLoading = true
+      try {
+        const headers = this.getAuthHeaders()
+        const query = unitId ? `?unit_id=${unitId}` : ''
+        const response = await fetch(buildApiUrl(`/dashboard/zones/${buildingId}${query}`), {
+          headers,
+          credentials: 'include',
+        })
+        if (!response.ok) {
+          this.zones = []
+          return
+        }
+        const data = await response.json()
+        this.zones = data.zones || []
+        // Auto-select first zone; UI will hide selector when only one exists
+        this.selectedZoneId = this.zones[0]?.id ?? null
+      } catch {
+        this.zones = []
+      } finally {
+        this.zonesLoading = false
       }
     },
 
@@ -318,6 +423,10 @@ export const useDashboardStore = defineStore('dashboard', {
 
     // Clear all data (for logout)
     clearDashboardData() {
+      this.selectedBuildingId = null
+      this.selectedDeviceId = null
+      this.selectedZoneId = null
+      this.zones = []
       this.devices = []
       this.buildings = []
       this.mqttConfig = {

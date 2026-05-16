@@ -1,41 +1,85 @@
 <template>
   <div>
-    <CButton color="primary" @click="show = true">Rate</CButton>
+    <CButton color="primary" @click="show = true">
+      {{ isOccupant ? 'Rate Comfort' : 'Rate Services' }}
+    </CButton>
+
     <CModal :visible="show" @close="show = false">
       <template #header>
-        <h5 class="modal-title">Rate Forecast Services</h5>
+        <h5 class="modal-title">
+          {{ isOccupant ? 'Thermal Comfort Rating' : 'Service Quality Rating' }}
+        </h5>
       </template>
-      <CCard class="mb-3 mx-auto" style="width: 90%; margin-top: 2rem;">
+
+      <CCard class="mb-3 mx-auto" style="width: 90%; margin-top: 1.5rem;">
         <CCardBody>
-          <h5 class="mb-4 text-center">Rate the Weather Forecasts</h5>
-          <div v-for="service in services" :key="service.name" class="d-flex align-items-center mb-3">
-            <div class="flex-grow-1 fw-bold">{{ service.name === 'Weather Data Service' ? 'Service 1' : service.name === 'Environmental Data' ? 'Service 2' : service.name }}</div>
-            <div>
-              <span v-for="n in max" :key="n" @click="setServiceRating(service, n)" style="cursor:pointer; font-size:2rem; color: gold;">
-                <span v-if="n <= service.rating">&#9733;</span>
-                <span v-else>&#9734;</span>
-              </span>
+
+          <!-- ── OCCUPANT: thermal comfort slider 1-10 ── -->
+          <template v-if="isOccupant">
+            <h5 class="mb-1 text-center">How comfortable is the temperature?</h5>
+            <p class="text-center text-muted mb-4" style="font-size:0.85rem;">
+              1 = too cold &nbsp;·&nbsp; 5-6 = comfortable &nbsp;·&nbsp; 10 = too hot
+            </p>
+
+            <div v-for="service in services" :key="service.id" class="mb-4">
+              <div class="fw-bold mb-2">{{ service.name }}</div>
+              <div class="d-flex align-items-center gap-2">
+                <span class="comfort-label cold">❄️ Cold</span>
+                <div class="slider-wrapper flex-grow-1">
+                  <input
+                    type="range"
+                    class="comfort-slider"
+                    min="1" max="10" step="1"
+                    v-model.number="service.rating"
+                    :style="sliderStyle(service.rating)"
+                  />
+                  <div class="tick-labels">
+                    <span v-for="n in 10" :key="n">{{ n }}</span>
+                  </div>
+                </div>
+                <span class="comfort-label hot">🔥 Hot</span>
+              </div>
+              <div class="text-center mt-1">
+                <span class="comfort-badge" :style="badgeStyle(service.rating)">
+                  {{ comfortLabel(service.rating) }}
+                </span>
+              </div>
             </div>
-          </div>
+          </template>
+
+          <!-- ── MANAGER / ADMIN: star rating 1-5 ── -->
+          <template v-else>
+            <h5 class="mb-4 text-center">Rate the Weather &amp; Forecast Services</h5>
+
+            <div v-for="service in services" :key="service.id" class="d-flex align-items-center mb-3">
+              <div class="flex-grow-1 fw-bold">{{ service.name }}</div>
+              <div>
+                <span
+                  v-for="n in 5" :key="n"
+                  @click="service.rating = n"
+                  style="cursor:pointer; font-size:2rem; color: gold;"
+                >
+                  <span v-if="n <= service.rating">&#9733;</span>
+                  <span v-else>&#9734;</span>
+                </span>
+              </div>
+            </div>
+          </template>
+
         </CCardBody>
       </CCard>
-      <!--
-      -->
-      
-      <!-- Error Message -->
+
       <div v-if="submitError" class="alert alert-danger mx-auto" style="width: 90%;">
         {{ submitError }}
       </div>
-      
-      <!-- Authentication Warning -->
       <div v-if="!authStore.isAuthenticated" class="alert alert-warning mx-auto" style="width: 90%;">
         Please connect your wallet to submit ratings
       </div>
-      
+
       <div class="d-flex justify-content-center mb-3">
-        <CButton 
-          color="primary" 
-          @click="submitRating" 
+        <CButton
+          color="primary"
+          @click="submitRating"
           :disabled="submitting || !authStore.isAuthenticated"
         >
           <span v-if="submitting">
@@ -51,18 +95,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRatesStore } from '@/stores/rates.js'
 import { useServicesStore } from '@/stores/services.js'
 import { useAuthStore } from '@/stores/auth.js'
 import { CButton, CModal, CCard, CCardBody } from '@coreui/vue'
 
 const show = ref(false)
-const max = 5
-// Services will be loaded from database
 const services = ref([])
-const slider2 = ref(50)
-const comment = ref("")
 const submitting = ref(false)
 const submitError = ref(null)
 
@@ -70,112 +110,165 @@ const ratesStore = useRatesStore()
 const servicesStore = useServicesStore()
 const authStore = useAuthStore()
 
-// Initialize services from the services store when component mounts
+// Role detection
+const isOccupant = computed(() => authStore.userProfile?.role === 'OCCUPANT')
+const ratingType = computed(() => isOccupant.value ? 'thermal_comfort' : 'service_quality')
+const defaultRating = computed(() => isOccupant.value ? 5 : 0)
+
 onMounted(async () => {
   try {
-    // Fetch services from database if not already loaded
     if (servicesStore.services.length === 0) {
       await servicesStore.fetchServices()
     }
-    
-    // Use actual services from database
     services.value = servicesStore.services.map(service => ({
       id: service.id,
       name: service.name,
-      rating: 0
+      rating: defaultRating.value,
     }))
-    
-    console.log('✅ Rating component loaded services:', services.value)
   } catch (error) {
     console.error('❌ Failed to load services for rating:', error)
-    submitError.value = "Failed to load services. Please refresh the page."
+    submitError.value = 'Failed to load services. Please refresh the page.'
   }
 })
 
-function setServiceRating(service, val) {
-  service.rating = val
+// ── Thermal comfort helpers ──────────────────────────────────────
+function comfortLabel(val) {
+  if (val <= 2) return `${val} — Very Cold`
+  if (val <= 4) return `${val} — Cool`
+  if (val <= 6) return `${val} — Comfortable`
+  if (val <= 8) return `${val} — Warm`
+  return `${val} — Very Hot`
 }
 
+function sliderColor(val) {
+  const pct = (val - 1) / 9
+  const r = Math.round(pct < 0.5 ? 0 : (pct - 0.5) * 2 * 220)
+  const g = Math.round(pct < 0.5 ? pct * 2 * 180 : (1 - (pct - 0.5) * 2) * 180)
+  const b = Math.round(pct < 0.5 ? (1 - pct * 2) * 220 : 0)
+  return `rgb(${r},${g},${b})`
+}
+
+function sliderStyle(val) {
+  return {
+    '--thumb-color': sliderColor(val),
+    background: 'linear-gradient(to right, #3a86ff 0%, #06d6a0 50%, #ef233c 100%)',
+  }
+}
+
+function badgeStyle(val) {
+  return {
+    backgroundColor: sliderColor(val),
+    color: '#fff',
+    padding: '2px 12px',
+    borderRadius: '12px',
+    fontSize: '0.85rem',
+  }
+}
+
+// ── Submit ───────────────────────────────────────────────────────
 async function submitRating() {
   if (!authStore.isAuthenticated) {
-    submitError.value = "Please connect your wallet first"
+    submitError.value = 'Please connect your wallet first'
+    return
+  }
+
+  // Manager must have rated at least one service
+  if (!isOccupant.value && services.value.every(s => s.rating === 0)) {
+    submitError.value = 'Please rate at least one service'
     return
   }
 
   submitting.value = true
   submitError.value = null
-  
-  try {
-    // Submit separate ratings for each service that has been rated
-    const ratingPromises = services.value
-      .filter(service => service.rating > 0)
-      .map(service => {
-        // Include temperature comfort and comments in feedback
-        const fullFeedback = [
-          comment.value,
-          `Temperature comfort: ${slider2.value}%`
-        ].filter(Boolean).join(' | ')
-        
-        return ratesStore.submitRating(
-          service.id, 
-          service.rating, 
-          fullFeedback || null
-        )
-      })
-    
-    if (ratingPromises.length === 0) {
-      submitError.value = "Please rate at least one weather service"
-      return
-    }
 
-    // Wait for all ratings to be submitted
-    const results = await Promise.allSettled(ratingPromises)
-    
-    // Check if any submissions failed
-    const failed = results.filter(result => result.status === 'rejected')
-    const succeeded = results.filter(result => result.status === 'fulfilled')
-    
+  try {
+    const toSubmit = isOccupant.value
+      ? services.value                             // occupant always submits all
+      : services.value.filter(s => s.rating > 0)  // manager only submits rated ones
+
+    const results = await Promise.allSettled(
+      toSubmit.map(s => ratesStore.submitRating(s.id, s.rating, null, ratingType.value))
+    )
+
+    const failed = results.filter(r => r.status === 'rejected')
+    const succeeded = results.filter(r => r.status === 'fulfilled')
+
     if (succeeded.length > 0) {
-      console.log(`✅ Successfully submitted ${succeeded.length} rating(s)`)
-      
-      // Reset form after successful submission
-      services.value.forEach(service => service.rating = 0)
-      slider2.value = 50
-      comment.value = ""
+      services.value.forEach(s => s.rating = defaultRating.value)
       show.value = false
-      
-      // Show success message
-      if (failed.length === 0) {
-        console.log("🎉 All weather service ratings submitted successfully!")
-      } else {
-        console.warn(`⚠️ ${succeeded.length} ratings succeeded, ${failed.length} failed`)
-      }
     }
-    
     if (failed.length > 0) {
-      const errorMessages = failed.map(result => result.reason?.message || 'Unknown error')
-      submitError.value = `Some ratings failed: ${errorMessages.join(', ')}`
+      submitError.value = `Some submissions failed: ${failed.map(r => r.reason?.message || 'Unknown').join(', ')}`
     }
-    
   } catch (error) {
-    console.error('❌ Error submitting weather service ratings:', error)
-    submitError.value = error.message || 'Failed to submit ratings'
+    submitError.value = error.message || 'Failed to submit'
   } finally {
     submitting.value = false
   }
-}</script>
+}
+</script>
 
 <style scoped>
-/* Responsive modal and card styles */
 :deep(.modal-dialog) {
-  max-width: 500px !important;
-  width: 100vw !important;
+  max-width: 520px !important;
   margin: 0 auto;
 }
-:deep(.modal-content) {
-  width: 100% !important;
-  min-width: 0;
-  box-sizing: border-box;
+
+.comfort-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 56px;
+}
+.comfort-label.cold { color: #3a86ff; text-align: right; }
+.comfort-label.hot  { color: #ef233c; text-align: left; }
+
+.slider-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comfort-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+.comfort-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--thumb-color, #06d6a0);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.comfort-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--thumb-color, #06d6a0);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+  cursor: pointer;
+}
+
+.tick-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  font-size: 0.7rem;
+  color: #888;
+}
+
+.comfort-badge {
+  display: inline-block;
+  font-weight: 600;
 }
 
 /* Alert styles */
@@ -185,18 +278,10 @@ async function submitRating() {
   border: 1px solid transparent;
   border-radius: 0.375rem;
 }
-.alert-danger {
-  color: #721c24;
-  background-color: #f8d7da;
-  border-color: #f5c2c7;
-}
-.alert-warning {
-  color: #664d03;
-  background-color: #fff3cd;
-  border-color: #ffecb5;
-}
+.alert-danger  { color: #721c24; background-color: #f8d7da; border-color: #f5c2c7; }
+.alert-warning { color: #664d03; background-color: #fff3cd; border-color: #ffecb5; }
 
-/* Spinner styles */
+/* Spinner */
 .spinner-border {
   display: inline-block;
   width: 1rem;
@@ -207,50 +292,11 @@ async function submitRating() {
   border-radius: 50%;
   animation: spinner-border 0.75s linear infinite;
 }
-.spinner-border-sm {
-  width: 0.875rem;
-  height: 0.875rem;
-  border-width: 0.125em;
-}
-
-@keyframes spinner-border {
-  to {
-    transform: rotate(360deg);
-  }
-}
+.spinner-border-sm { width: 0.875rem; height: 0.875rem; border-width: 0.125em; }
+@keyframes spinner-border { to { transform: rotate(360deg); } }
 
 @media (max-width: 600px) {
-  :deep(.modal-dialog) {
-    max-width: 90vw !important;
-    width: 90vw !important;
-    left: 50% !important;
-    transform: translateX(-50%) !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    position: fixed !important;
-    top: 5vw !important;
-    box-sizing: border-box;
-  }
-  :deep(.modal-content) {
-    width: 90vw !important;
-    border-radius: 8px !important;
-    min-width: 0;
-    box-sizing: border-box;
-    padding: 0.5rem !important;
-  }
-  .mb-3.mx-auto {
-    width: 100% !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-  }
-  .form-control, .form-range {
-    font-size: 1em;
-  }
-  .modal-title {
-    font-size: 1.1em;
-  }
-  .d-flex.justify-content-center.mb-3 {
-    margin-bottom: 1rem !important;
-  }
+  :deep(.modal-dialog) { max-width: 95vw !important; }
+  .comfort-label { min-width: 44px; font-size: 0.72rem; }
 }
 </style>

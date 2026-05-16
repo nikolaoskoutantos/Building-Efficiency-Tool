@@ -34,7 +34,6 @@ class PredictorBase(BaseModel):
     name: str
     framework: str
     scores: dict = Field(default_factory=dict)
-    knowledge_id: int
 
 class PredictorCreate(PredictorBase):
     pass
@@ -53,7 +52,6 @@ class PredictorRead(PredictorBase):
 class HVACTrainingRequest(BaseModel):
     building_id: int
     sensor_id: int
-    knowledge_id: int = 1
     days_back: int = 30
 
 class HVACPredictionRequest(BaseModel):
@@ -75,6 +73,8 @@ def clamp_duration(duration: int, min_val: int = 1, max_val: int = 288) -> int:
 
 class HVACOptimizationRequest(BaseModel):
     building_id: int
+    device_id: Optional[int] = None   # hvac_unit_id — scopes result to a specific unit
+    zone_id: Optional[int] = None     # zone_id — further scopes to a zone within the unit
     starting_temperature: float
     starting_time: str
     outdoor_temperatures: List[float]
@@ -134,6 +134,17 @@ def _stable_hash(payload: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _parse_optimization_window(starting_time: str, duration: int):
+    """Return (window_start, window_end) as UTC-aware datetimes, or (None, None) on parse error."""
+    try:
+        from datetime import timedelta
+        ws = datetime.strptime(starting_time, "%d/%m/%Y %H:%M").replace(tzinfo=timezone.utc)
+        we = ws + timedelta(minutes=5 * clamp_duration(duration))
+        return ws, we
+    except (ValueError, TypeError):
+        return None, None
+
+
 def _persist_optimization_result(request: HVACOptimizationRequest, result: dict, user: dict) -> None:
     db = SessionLocal()
     try:
@@ -153,11 +164,17 @@ def _persist_optimization_result(request: HVACOptimizationRequest, result: dict,
             else None
         )
 
+        window_start, window_end = _parse_optimization_window(request.starting_time, request.duration)
+
         db.add(
             OptimizationResult(
                 building_id=request.building_id,
                 user_id=user_id,
+                hvac_unit_id=request.device_id,   # None for building-level results
+                zone_id=request.zone_id,
                 optimization_time=datetime.now(timezone.utc),
+                window_start=window_start,
+                window_end=window_end,
                 input_hash=_stable_hash(safe_input),
                 output_hash=_stable_hash(safe_output),
                 input_data=safe_input,

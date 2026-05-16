@@ -4,15 +4,12 @@ from db.connection import Base
 
 # String constants to avoid duplication (SonarQube S1192)
 TABLE_BUILDINGS = "buildings"
-TABLE_USERS = "users" 
+TABLE_USERS = "users"
 TABLE_USER_BUILDINGS = "user_buildings"
-TABLE_HVAC_UNITS = "hvac_units"
-TABLE_HVAC_SCHEDULE_INTERVALS = "hvac_schedule_intervals"
 
 # Foreign key references
 FK_BUILDINGS_ID = "buildings.id"
 FK_USERS_ID = "users.id"
-FK_HVAC_UNITS_ID = "hvac_units.id"
 
 # OnDelete actions
 ONDELETE_CASCADE = "CASCADE"
@@ -27,31 +24,38 @@ class Building(Base):
     address = Column(String, nullable=True)
     lat = Column(String, nullable=True)  # Latitude as string for flexibility
     lon = Column(String, nullable=True)  # Longitude as string for flexibility
+    building_metadata = Column(String, nullable=True)
 
 # User model
 class User(Base):
     __tablename__ = TABLE_USERS
     id = Column(Integer, primary_key=True)
-    wallet_address = Column(String, unique=True, index=True, nullable=False)
-    
+    wallet_address = Column(String, unique=True, index=True, nullable=True)
+    status = Column(String(32), nullable=False, server_default='registered')
+
     # Personal Information
     phone = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    address = Column(String, nullable=True)  # Physical address
-    
+    email = Column(String, unique=True, index=True, nullable=True)
+    address = Column(String, nullable=True)
+
     # Building Management
     default_building_id = Column(Integer, ForeignKey(FK_BUILDINGS_ID, ondelete=ONDELETE_SET_NULL), nullable=True)
-    
+
     # Blockchain & Crypto
     public_key = Column(String, nullable=True)  # Public key for encryption/signatures
-    
+
     # API Configuration
     api_base_url = Column(String, nullable=True)  # Custom API endpoint preference
-    
+
     # System fields
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     last_login = Column(DateTime(timezone=True), nullable=True)
+
+    # Replay protection: ms-epoch timestamp of the last accepted Web3 nonce.
+    # Reject any incoming nonce whose embedded timestamp is <= this value.
+    last_nonce_ts = Column(Integer, nullable=True)
+
 
 # UserBuilding mapping table
 from sqlalchemy import UniqueConstraint
@@ -68,30 +72,6 @@ class UserBuilding(Base):
 
 
 
-class HVACScheduleInterval(Base):
-    __tablename__ = TABLE_HVAC_SCHEDULE_INTERVALS
 
-    id = Column(Integer, primary_key=True, index=True)
 
-    building_id = Column(Integer, ForeignKey(FK_BUILDINGS_ID, ondelete=ONDELETE_CASCADE), nullable=False)
 
-    # NEW: schedule belongs to an HVAC unit (not a sensor row)
-    hvac_unit_id = Column(Integer, ForeignKey(FK_HVAC_UNITS_ID, ondelete=ONDELETE_CASCADE), nullable=False)
-
-    # UTC naive timestamps (timestamp without time zone)
-    start_ts = Column(DateTime(timezone=False), nullable=False)
-    end_ts = Column(DateTime(timezone=False), nullable=False)
-
-    is_on = Column(Boolean, nullable=False, default=True)
-    setpoint = Column(Float, nullable=True)
-
-    created_by_user_id = Column(Integer, ForeignKey(FK_USERS_ID, ondelete=ONDELETE_SET_NULL), nullable=True)
-
-    created_at = Column(DateTime(timezone=False), server_default=func.now())
-    updated_at = Column(DateTime(timezone=False), server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("hvac_unit_id", "start_ts", name="uq_hvac_schedule_hvacunit_start"),
-        Index("ix_hvac_schedule_bld_hvacunit_start", "building_id", "hvac_unit_id", "start_ts"),
-        Index("ix_hvac_schedule_hvacunit_timerange", "hvac_unit_id", "start_ts", "end_ts"),
-    )

@@ -76,6 +76,9 @@ services:
     env_file:
       - .env
 
+    environment:
+      SESSION_COOKIE_SECURE: "false"
+
     depends_on:
       - db
 
@@ -180,6 +183,7 @@ services:
       - ./emqx/base.hocon:/opt/emqx/etc/base.hocon:ro
     ports:
       - "18083:18083"
+      - "1883:1883"
 
     networks:
       - proxy

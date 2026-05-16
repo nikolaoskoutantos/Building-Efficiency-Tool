@@ -114,7 +114,30 @@ export const apiRequest = async (endpoint, options = {}) => {
     if (config.debug) {
       console.log(`✅ API Response: ${response.status} ${response.statusText}`)
     }
-    
+
+    // On 401, attempt token refresh and retry the request once
+    if (response.status === 401) {
+      try {
+        const { useAuthStore } = await import('../stores/auth.js')
+        const authStore = useAuthStore()
+        const refreshed = await authStore.refreshAccessToken()
+        if (refreshed) {
+          const newToken = authStore.getJwtToken()
+          const retryController = new AbortController()
+          const retryTimeoutId = setTimeout(() => retryController.abort(), config.timeout)
+          const retryResponse = await fetch(url, {
+            ...defaultOptions,
+            headers: { ...defaultOptions.headers, 'Authorization': `Bearer ${newToken}` },
+            signal: retryController.signal
+          })
+          clearTimeout(retryTimeoutId)
+          return retryResponse
+        }
+      } catch (refreshError) {
+        console.warn('Token refresh failed during 401 retry:', refreshError)
+      }
+    }
+
     return response
   } catch (error) {
     if (error.name === 'AbortError') {

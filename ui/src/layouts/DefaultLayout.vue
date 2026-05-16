@@ -17,5 +17,6 @@ import AppSidebar from '@/components/AppSidebar.vue'
       </div>
       <AppFooter />
     </div>
+
   </div>
 </template>

@@ -3,17 +3,13 @@ SCHEDULE_DELETED = "Schedule deleted"
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from typing import Annotated, Optional
-import uuid
-import secrets
-import bcrypt
-from datetime import datetime, timezone
+from datetime import datetime, time
 from models.hvac_unit import HVACUnit
-from models.sensor import Sensor
+from models.zone_schedule import ZoneSchedule, ZoneScheduleInterval
 from pydantic import BaseModel
 from typing import List
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models.hvac_models import HVACScheduleInterval
 
 
 def get_db():
@@ -25,7 +21,7 @@ def get_db():
 
 DbSession = Annotated[Session, Depends(get_db)]
 
-from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
+from utils.auth_dependencies import get_current_user_role
 router = APIRouter(
     prefix="/schedules",
     tags=["HVAC Schedules"],
@@ -33,207 +29,126 @@ router = APIRouter(
 )
 
 
-
-class SchedulePeriod(BaseModel):
-    start: str  # 'HH:mm'
-    end: str    # 'HH:mm'
-    enabled: bool
+class ScheduleIntervalCreate(BaseModel):
+    day_of_week: Optional[int] = None  
+    start_time: str  # 'HH:MM'
+    end_time: str    # 'HH:MM'
+    target_setpoint_c: Optional[float] = None
+    min_setpoint_c: Optional[float] = None
+    max_setpoint_c: Optional[float] = None
+    expected_occupancy: Optional[int] = None
+    hvac_mode: Optional[str] = None  # cooling, heating, auto, off
 
 
 class ScheduleCreate(BaseModel):
-    hvac_id: int
-    periods: List[SchedulePeriod]
+    zone_id: int
+    schedule_type: str  # comfort, occupancy, dr_event, manual_override
+    name: Optional[str] = None
+    valid_from: Optional[datetime] = None
+    valid_to: Optional[datetime] = None
+    intervals: Optional[List[ScheduleIntervalCreate]] = None
 
 
-class ScheduleRead(ScheduleCreate):
+class ScheduleRead(BaseModel):
     id: int
-    created_at: str
+    zone_id: int
+    schedule_type: str
+    name: Optional[str] = None
+    valid_from: Optional[datetime] = None
+    valid_to: Optional[datetime] = None
     class Config:
         from_attributes = True
 
 
-@router.get(
-    "/",
-    response_model=List[ScheduleRead],
-    responses={
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
-@router.get(
-    "/",
-    response_model=List[ScheduleRead],
-    responses={
-        403: {"description": "Forbidden: User not authorized to access this HVAC unit's schedules."},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
+@router.get("/", response_model=List[ScheduleRead])
 def get_schedules(
-    hvac_id: int = None,
+    zone_id: Optional[int] = None,
     db: DbSession = None,
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))] = None
 ):
-    from utils.policies import has_permission
-    user_id = resolve_registered_user_id(user, db) if user else None
-    q = db.query(HVACScheduleInterval)
-    if hvac_id is not None:
-        # Permission check for HVAC unit
-        if user_id is None or not has_permission(user_id, "device", hvac_id, db):
-            raise HTTPException(status_code=403, detail="You are not authorized to access this HVAC unit's schedules.")
-        q = q.filter(HVACScheduleInterval.hvac_unit_id == hvac_id)
-        return q.order_by(HVACScheduleInterval.created_at.desc()).all()
-    schedules = q.order_by(HVACScheduleInterval.created_at.desc()).all()
-    return [schedule for schedule in schedules if has_permission(user_id, "device", schedule.hvac_unit_id, db)]
+    q = db.query(ZoneSchedule)
+    if zone_id is not None:
+        q = q.filter(ZoneSchedule.zone_id == zone_id)
+    schedules = q.order_by(ZoneSchedule.id.desc()).all()
+    return schedules
 
-@router.post(
-    "/",
-    response_model=ScheduleRead,
-    responses={
-        400: {"description": "Invalid input"},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
-@router.post(
-    "/",
-    response_model=ScheduleRead,
-    responses={
-        403: {"description": "Forbidden: User not authorized to create schedules for this HVAC unit."},
-        400: {"description": "Invalid input"},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
+
+@router.post("/", response_model=ScheduleRead, responses={403: {"description": "Forbidden"}})
 def create_schedule(
     schedule: ScheduleCreate,
     db: DbSession = None,
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
 ):
-    from utils.policies import has_permission
-    user_id = resolve_registered_user_id(user, db) if user else None
-    if user_id is None or not has_permission(user_id, "device", schedule.hvac_id, db):
-        raise HTTPException(status_code=403, detail="You are not authorized to create schedules for this HVAC unit.")
-    # For compatibility, create one interval per period
-    created_intervals = []
-    for period in schedule.periods:
-        db_interval = HVACScheduleInterval(
-            hvac_unit_id=schedule.hvac_id,
-            start_ts=datetime.strptime(period.start, '%H:%M'),
-            end_ts=datetime.strptime(period.end, '%H:%M'),
-            is_on=period.enabled,
-            setpoint=None,
-            building_id=None,
-            created_by_user_id=None
-        )
-        db.add(db_interval)
-        created_intervals.append(db_interval)
-    db.commit()
-    for interval in created_intervals:
-        db.refresh(interval)
-    return created_intervals[0] if created_intervals else None
+    db_schedule = ZoneSchedule(
+        zone_id=schedule.zone_id,
+        schedule_type=schedule.schedule_type,
+        name=schedule.name,
+        valid_from=schedule.valid_from,
+        valid_to=schedule.valid_to,
+    )
+    db.add(db_schedule)
+    db.flush()
 
-@router.get(
-    "/{schedule_id}",
-    response_model=ScheduleRead,
-    responses={
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
-@router.get(
-    "/{schedule_id}",
-    response_model=ScheduleRead,
-    responses={
-        403: {"description": "Forbidden: User not authorized to access this schedule."},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
+    if schedule.intervals:
+        for iv in schedule.intervals:
+            db.add(ZoneScheduleInterval(
+                schedule_id=db_schedule.id,
+                day_of_week=iv.day_of_week,
+                start_time=datetime.strptime(iv.start_time, "%H:%M").time(),
+                end_time=datetime.strptime(iv.end_time, "%H:%M").time(),
+                target_setpoint_c=iv.target_setpoint_c,
+                min_setpoint_c=iv.min_setpoint_c,
+                max_setpoint_c=iv.max_setpoint_c,
+                expected_occupancy=iv.expected_occupancy,
+                hvac_mode=iv.hvac_mode,
+            ))
+
+    db.commit()
+    db.refresh(db_schedule)
+    return db_schedule
+
+
+@router.get("/{schedule_id}", response_model=ScheduleRead, responses={404: {"description": "Schedule not found"}})
 def get_schedule(
     schedule_id: int,
     db: DbSession = None,
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN", "OCCUPANT"]))] = None
 ):
-    from utils.policies import has_permission
-    user_id = resolve_registered_user_id(user, db) if user else None
-    schedule = db.query(HVACScheduleInterval).filter(HVACScheduleInterval.id == schedule_id).first()
+    schedule = db.query(ZoneSchedule).filter(ZoneSchedule.id == schedule_id).first()
     if not schedule:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
-    if user_id is None or not has_permission(user_id, "device", schedule.hvac_unit_id, db):
-        raise HTTPException(status_code=403, detail="You are not authorized to access this schedule.")
     return schedule
 
-@router.put(
-    "/{schedule_id}",
-    response_model=ScheduleRead,
-    responses={
-        400: {"description": "Invalid input"},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
-@router.put(
-    "/{schedule_id}",
-    response_model=ScheduleRead,
-    responses={
-        403: {"description": "Forbidden: User not authorized to update this schedule."},
-        400: {"description": "Invalid input"},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
+
+@router.put("/{schedule_id}", response_model=ScheduleRead, responses={404: {"description": "Schedule not found"}})
 def update_schedule(
     schedule_id: int,
     schedule: ScheduleCreate,
     db: DbSession = None,
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
 ):
-    from utils.policies import has_permission
-    user_id = resolve_registered_user_id(user, db) if user else None
-    db_schedule = db.query(HVACScheduleInterval).filter(HVACScheduleInterval.id == schedule_id).first()
+    db_schedule = db.query(ZoneSchedule).filter(ZoneSchedule.id == schedule_id).first()
     if not db_schedule:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
-    if user_id is None or not has_permission(user_id, "device", db_schedule.hvac_unit_id, db):
-        raise HTTPException(status_code=403, detail="You are not authorized to update this schedule.")
-    db_schedule.hvac_unit_id = schedule.hvac_id
-    # Only update the first period for compatibility
-    if schedule.periods:
-        period = schedule.periods[0]
-        db_schedule.start_ts = datetime.strptime(period.start, '%H:%M')
-        db_schedule.end_ts = datetime.strptime(period.end, '%H:%M')
-        db_schedule.is_on = period.enabled
+    db_schedule.zone_id = schedule.zone_id
+    db_schedule.schedule_type = schedule.schedule_type
+    db_schedule.name = schedule.name
+    db_schedule.valid_from = schedule.valid_from
+    db_schedule.valid_to = schedule.valid_to
     db.commit()
     db.refresh(db_schedule)
     return db_schedule
 
-@router.delete(
-    "/{schedule_id}",
-    responses={
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
-@router.delete(
-    "/{schedule_id}",
-    responses={
-        403: {"description": "Forbidden: User not authorized to delete this schedule."},
-        404: {"description": "Schedule not found"},
-        500: {"description": "Internal server error"}
-    }
-)
+
+@router.delete("/{schedule_id}", responses={404: {"description": "Schedule not found"}})
 def delete_schedule(
     schedule_id: int,
     db: DbSession = None,
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None
 ):
-    from utils.policies import has_permission
-    user_id = resolve_registered_user_id(user, db) if user else None
-    db_schedule = db.query(HVACScheduleInterval).filter(HVACScheduleInterval.id == schedule_id).first()
+    db_schedule = db.query(ZoneSchedule).filter(ZoneSchedule.id == schedule_id).first()
     if not db_schedule:
         raise HTTPException(status_code=404, detail=SCHEDULE_NOT_FOUND)
-    if user_id is None or not has_permission(user_id, "device", db_schedule.hvac_unit_id, db):
-        raise HTTPException(status_code=403, detail="You are not authorized to delete this schedule.")
     db.delete(db_schedule)
     db.commit()
     return {"detail": SCHEDULE_DELETED}

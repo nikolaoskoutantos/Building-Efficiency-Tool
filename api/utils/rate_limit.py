@@ -24,13 +24,29 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(max_requests=5, window_seconds=60)  # 5 requests per minute per IP
 ml_rate_limiter = RateLimiter(max_requests=10, window_seconds=300)  # 10 requests per 5 min per IP
+web3_register_rate_limiter = RateLimiter(max_requests=2, window_seconds=300)  # 2 requests per 5 min per IP
+
+
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
 
 def rate_limit_dependency(request: Request):
-    ip = request.client.host
+    ip = _client_ip(request)
     if not rate_limiter.is_allowed(ip):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
 
 def ml_rate_limit_dependency(request: Request):
-    ip = request.client.host
+    ip = _client_ip(request)
     if not ml_rate_limiter.is_allowed(ip):
         raise HTTPException(status_code=429, detail="Too many ML requests. Please try again in a few minutes.")
+
+
+def web3_register_rate_limit_dependency(request: Request):
+    ip = _client_ip(request)
+    if not web3_register_rate_limiter.is_allowed(ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many registration attempts from this IP. Please try again in a few minutes.",
+        )

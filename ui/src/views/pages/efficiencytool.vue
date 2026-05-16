@@ -114,16 +114,7 @@
             </div>
           </div>
           <div class="slider-row-responsive">
-            <label for="slider1" class="form-label mb-1 text-center w-100" style="font-weight: 600;">
-              Indoor Temperature Setpoint: {{ slider1 }}°C
-            </label>
-            <div class="slider-wrapper">
-              <div class="d-flex justify-content-between align-items-center w-100 mb-1">
-                <span style="font-size: 0.95em; color: #0d6efd; font-weight: 500;">0</span>
-                <span style="font-size: 0.95em; color: #dc3545; font-weight: 500;">40</span>
-              </div>
-              <CFormRange id="slider1" v-model="slider1" min="0" max="40" />
-            </div>
+            <SetpointSlider v-model="slider1" :min="16" :max="30" label="Indoor Setpoint" />
           </div>
         </div>
       </CCardBody>
@@ -134,8 +125,16 @@
       :optimize-button-label="optimizeButtonLabel"
       :schedule-saving="scheduleSaving"
       :schedule-save-message="scheduleSaveMessage"
+      :devices="activeBuildingDevices"
+      :selected-device-id="selectedDeviceId"
+      :zones="zones"
+      :selected-zone-id="selectedZoneId"
+      :show-zone-selector="showZoneSelector"
+      :current-setpoint="slider1"
       @optimize="runOptimization"
       @schedule-change="handleScheduleChange"
+      @device-change="handleDeviceChange"
+      @zone-change="handleZoneChange"
     />
     <CAlert
       v-if="optimizationReadinessMessage"
@@ -168,9 +167,25 @@
     >
       {{ optimizeSuccessMessage }}
     </CAlert>
-    <div class="chart-wrapper" style="overflow: hidden; width: 100%; height: 600px;">
-      <div style="width: 100%; height: 600px; overflow: hidden;">
-        <CChartLine :key="chartKey" :data="chartData" :options="chartOptions" class="mb-4" style="width: 100%; height: 600px;" />
+    <div class="chart-wrapper">
+      <!-- Spinner overlay — shown while time grid or schedule is loading -->
+      <Transition name="chart-overlay">
+        <div v-if="chartLoading" class="chart-overlay" aria-hidden="true">
+          <div class="chart-overlay__backdrop" />
+          <div class="chart-overlay__spinner">
+            <svg class="chart-spinner-ring" viewBox="0 0 44 44" xmlns="http://www.w3.org/2000/svg">
+              <circle class="chart-spinner-ring__track" cx="22" cy="22" r="18" fill="none" stroke-width="3.5" />
+              <circle class="chart-spinner-ring__arc"   cx="22" cy="22" r="18" fill="none" stroke-width="3.5"
+                stroke-dasharray="90 200" stroke-linecap="round" />
+            </svg>
+            <span class="chart-overlay__label">Loading data…</span>
+          </div>
+        </div>
+      </Transition>
+
+      <!-- Chart — fades to 35% while loading so the overlay reads clearly -->
+      <div :class="['chart-canvas-host', { 'chart-canvas-host--loading': chartLoading }]">
+        <CChartLine :key="chartKey" :data="chartData" :options="chartOptions" style="width:100%;height:100%;" />
       </div>
     </div>
     <EnergyBarChart class="mb-4" />
@@ -180,10 +195,11 @@
 <script setup>
 import { CChartLine } from '@coreui/vue-chartjs'
 import RatingOne from '@/components/Rating.vue'
+import SetpointSlider from '@/components/SetpointSlider.vue'
 import EnergyBarChart from '@/components/EnergyBarChart.vue'
 import HvacScheduleTable from '@/components/HvacScheduleTable.vue'
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CFormRange, CFormSwitch, CDropdown, CDropdownToggle, CDropdownMenu, CSpinner, CAlert } from '@coreui/vue'
+import { CRow, CCol, CWidgetStatsA, CCard, CCardBody, CFormSwitch, CDropdown, CDropdownToggle, CDropdownMenu, CSpinner, CAlert } from '@coreui/vue'
 import { useThemeStore } from '@/stores/theme.js'
 import { useControlStore } from '@/stores/control.js'
 import { useAlertsStore } from '@/stores/alerts.js'
@@ -210,14 +226,45 @@ const optimizationResult = ref(null)
 const scheduleSaving = ref(false)
 const scheduleSaveMessage = ref('')
 const dismissOptimizationReadiness = ref(false)
+const scheduleReloading = ref(false)
+const chartLoading = computed(() =>
+  scheduleReloading.value || dashboardStore.efficiencyTimeGrid.loading === true
+)
 const dashboardTimeGridRows = computed(() => dashboardStore.efficiencyTimeGrid.rows || [])
 const dashboardTimeGridCurrentRow = computed(() => dashboardStore.efficiencyTimeGrid.currentRow || null)
 const dashboardReferenceTime = computed(() => dashboardStore.efficiencyTimeGrid.referenceTime || null)
 const optimizationContext = computed(() => dashboardStore.efficiencyTimeGrid.optimizationContext || null)
+const activeBuildingDevices = computed(() => dashboardStore.activeBuildingDevices)
+const selectedDeviceId = computed(() => dashboardStore.activeDevice?.id ?? null)
+const zones = computed(() => dashboardStore.zones)
+const selectedZoneId = computed(() => dashboardStore.activeZone?.id ?? null)
+const showZoneSelector = computed(() => dashboardStore.showZoneSelector)
 let scheduleSaveTimeout = null
 let scheduleSaveMessageTimeout = null
+let scheduleSaveRequestSequence = 0
 const syncingTopControls = ref(false)
 const optimizationRequestTimeoutMs = 120000
+
+// Stable schedule ref for the chart — only updates when the schedule *structure* changes
+// (start/end/enabled/timestamps), not when setpoints change. This breaks the reactive
+// dependency between slider1 saves and chartData, preventing unnecessary chart redraws.
+const chartSchedule = ref([])
+watch(
+  () => controlStore.editableSchedule
+    .map(r => `${r.start}|${r.end}|${r.enabled ? '1' : '0'}|${r.start_ts ?? ''}|${r.end_ts ?? ''}`)
+    .join(','),
+  () => {
+    chartSchedule.value = controlStore.editableSchedule.map(row => ({
+      start: row.start,
+      end: row.end,
+      enabled: row.enabled,
+      start_ts: row.start_ts,
+      end_ts: row.end_ts,
+    }))
+  },
+  { immediate: true },
+)
+const scheduleWindowHours = 12
 
 function formatDateForApi(dateString) {
   const date = new Date(dateString.replace(' ', 'T'))
@@ -239,7 +286,7 @@ function serializeScheduleRowsForApi(rows) {
     }
 
     return {
-      ...(numericId !== undefined ? { id: numericId } : {}),
+      ...(numericId === undefined ? {} : { id: numericId }),
       start: row?.start,
       end: row?.end,
       enabled: row?.enabled !== false,
@@ -248,14 +295,42 @@ function serializeScheduleRowsForApi(rows) {
   })
 }
 
+function areScheduleRowsEquivalent(currentRows, incomingRows) {
+  if (!Array.isArray(currentRows) || !Array.isArray(incomingRows) || currentRows.length !== incomingRows.length) {
+    return false
+  }
+
+  const normalizeSetpoint = (row) => {
+    if (row?.enabled === false) {
+      return null
+    }
+    const value = row?.setpoint
+    return value == null ? null : Number(value)
+  }
+
+  return currentRows.every((row, index) => {
+    const incoming = incomingRows[index]
+    if (!incoming) {
+      return false
+    }
+
+    return (
+      row?.start === incoming?.start &&
+      row?.end === incoming?.end &&
+      (row?.enabled !== false) === (incoming?.enabled !== false) &&
+      normalizeSetpoint(row) === normalizeSetpoint(incoming)
+    )
+  })
+}
+
 function toFiniteNumber(value) {
-  const numericValue = Number(value)
-  return Number.isFinite(numericValue) ? numericValue : null
+  const n = +value
+  return Number.isFinite(n) ? n : null
 }
 
 function energyRawToKwh(value) {
-  const numericValue = toFiniteNumber(value)
-  return numericValue == null ? null : numericValue / 1000
+  const n = +value
+  return Number.isFinite(n) ? n / 1000 : null
 }
 
 function formatEnergyValue(value) {
@@ -276,8 +351,8 @@ function formatRecommendationLabel(value) {
   }
 
   return String(value)
-    .replaceAll(/_/g, ' ')
-    .replaceAll(/\b\w/g, (character) => character.toUpperCase())
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
 const optimizationSummary = computed(() => {
@@ -302,7 +377,7 @@ const optimizationSummary = computed(() => {
       : null)
   const averageDeviation = toFiniteNumber(result?.avg_deviation_from_setpoint)
   const recommendedOperation = Array.isArray(result?.recommended_operation)
-    ? result.recommended_operation.slice(0, 12).map(value => Boolean(value))
+    ? result.recommended_operation.slice(0, 12).map(value => !!value)
     : []
 
   return {
@@ -332,9 +407,9 @@ const rewardSummaryValues = computed(() => [
   {
     title: 'Estimated Savings',
     value:
-      optimizationSummary.value?.savedKwh != null
-        ? `${formatEnergyValue(optimizationSummary.value.savedKwh)} (${formatPercentValue(optimizationSummary.value.savedPercentage)})`
-        : '--',
+      optimizationSummary.value?.savedKwh == null
+        ? '--'
+        : `${formatEnergyValue(optimizationSummary.value.savedKwh)} (${formatPercentValue(optimizationSummary.value.savedPercentage)})`,
   },
   {
     title: 'Avg Comfort Drift',
@@ -349,16 +424,23 @@ const optimizeSuccessMessage = computed(() => {
 
   const scheduleMinutes = optimizationSummary.value.activeIntervals * 5
   const savingsText =
-    optimizationSummary.value.savedKwh != null
-      ? `${formatEnergyValue(optimizationSummary.value.savedKwh)} saved`
-      : 'Optimization completed'
+    optimizationSummary.value.savedKwh == null
+      ? 'Optimization completed'
+      : `${formatEnergyValue(optimizationSummary.value.savedKwh)} saved`
 
   return `${savingsText} with ${scheduleMinutes} minutes scheduled on (${formatRecommendationLabel(optimizationSummary.value.strategy)}).`
 })
 
-const missingOptimizationFields = computed(() => optimizationContext.value?.missing_fields || [])
+const missingOptimizationFields = computed(() => {
+  const fields = optimizationContext.value?.missing_fields || []
+  // slider1 always provides a valid setpoint that is sent with the optimization request,
+  // so never block or warn on hvac_setpoint when slider1 has a finite value.
+  return Number.isFinite(slider1.value)
+    ? fields.filter(f => f !== 'hvac_setpoint')
+    : fields
+})
 const optimizationReadinessMessage = computed(() => {
-  if (dismissOptimizationReadiness.value || optimizationContext.value?.is_ready !== false || missingOptimizationFields.value.length === 0) {
+  if (dismissOptimizationReadiness.value || missingOptimizationFields.value.length === 0) {
     return ''
   }
 
@@ -367,7 +449,7 @@ const optimizationReadinessMessage = computed(() => {
     if (field === 'hvac_setpoint') return 'HVAC setpoint'
     if (field === 'outdoor_temperatures') return 'outdoor forecast'
     if (field === 'ts') return 'reference time'
-    return field.replaceAll(/_/g, ' ')
+    return field.replaceAll('_', ' ')
   })
 
   return `Optimization is waiting for ${labels.join(', ')} before it can run.`
@@ -393,7 +475,7 @@ function getStartingTemperature() {
 
 function getOutdoorTemperaturesForOptimization() {
   if (optimizationContext.value?.outdoor_temperatures?.length) {
-    return optimizationContext.value.outdoor_temperatures.map(value => Number(value))
+    return optimizationContext.value.outdoor_temperatures.map(Number)
   }
   const weatherDataset = getDatasetByLabelFragment('Outdoor Temperature')
   const forecastDataset = getDatasetByLabelFragment('Forecast')
@@ -402,7 +484,7 @@ function getOutdoorTemperaturesForOptimization() {
   const values = []
 
   const currentOutdoor = weatherData[pastPoints - 1]
-  values.push(typeof currentOutdoor === 'number' ? Number(currentOutdoor.toFixed(3)) : 22.0)
+  values.push(typeof currentOutdoor === 'number' ? Number(currentOutdoor.toFixed(3)) : 22)
 
   for (let i = 0; i < 12; i += 1) {
     const forecastValue = forecastData[pastPoints + i]
@@ -413,18 +495,23 @@ function getOutdoorTemperaturesForOptimization() {
 }
 
   function getOptimizationPayload() {
-    const buildingId = dashboardStore.defaultBuilding?.id
+    const buildingId = dashboardStore.activeBuilding?.id
     if (!buildingId) {
-      throw new Error('No default building is available for optimization.')
-  }
+      throw new Error('No building is selected for optimization.')
+    }
 
-  return {
-    building_id: buildingId,
-    starting_temperature: getStartingTemperature(),
-    starting_time: optimizationContext.value?.starting_time || formatDateForApi(chartLabels[pastPoints]),
-    outdoor_temperatures: getOutdoorTemperaturesForOptimization(),
-    setpoint: Number(slider1.value),
-    duration: optimizationContext.value?.duration || 12,
+    const deviceId = dashboardStore.activeDevice?.id ?? null
+    const activeZoneId = dashboardStore.activeZone?.id ?? null
+
+    return {
+      building_id: buildingId,
+      ...(deviceId == null ? {} : { device_id: deviceId }),
+      ...(activeZoneId == null ? {} : { zone_id: activeZoneId }),
+      starting_temperature: getStartingTemperature(),
+      starting_time: optimizationContext.value?.starting_time || formatDateForApi(chartLabels[pastPoints]),
+      outdoor_temperatures: getOutdoorTemperaturesForOptimization(),
+      setpoint: Number(slider1.value),
+      duration: optimizationContext.value?.duration || 12,
       optimization_type: optimizationContext.value?.optimization_type || 'normal',
     }
   }
@@ -443,17 +530,99 @@ function getOutdoorTemperaturesForOptimization() {
     return Number.isFinite(numericSetpoint) ? numericSetpoint : null
   }
 
+  const APP_TIME_ZONE = 'Europe/Athens'
+
+  function getTimeZoneParts(value, timeZone = APP_TIME_ZONE) {
+    const date = value instanceof Date ? value : new Date(value)
+    if (Number.isNaN(date.getTime())) {
+      return null
+    }
+
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+
+    const parts = Object.fromEntries(
+      formatter
+        .formatToParts(date)
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, part.value]),
+    )
+
+    return {
+      year: Number(parts.year),
+      month: Number(parts.month),
+      day: Number(parts.day),
+      hour: Number(parts.hour),
+      minute: Number(parts.minute),
+    }
+  }
+
+  function buildDateFromTimeZoneParts(parts, timeZone = APP_TIME_ZONE) {
+    const utcGuess = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, 0, 0))
+    const zonedGuess = getTimeZoneParts(utcGuess, timeZone)
+    if (!zonedGuess) {
+      return utcGuess
+    }
+
+    const targetUtcMinutes = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute) / 60000
+    const zonedUtcMinutes = Date.UTC(
+      zonedGuess.year,
+      zonedGuess.month - 1,
+      zonedGuess.day,
+      zonedGuess.hour,
+      zonedGuess.minute,
+    ) / 60000
+
+    return new Date(utcGuess.getTime() + (targetUtcMinutes - zonedUtcMinutes) * 60000)
+  }
+
+  function addDaysToTimeZoneDateParts(parts, dayOffset) {
+    const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + dayOffset, 0, 0, 0, 0))
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+    }
+  }
+
   function materializeScheduleRowsLocal(rows, referenceTime) {
     if (!Array.isArray(rows) || !referenceTime) {
       return []
     }
 
-    const localRef = new Date(referenceTime)
-    if (Number.isNaN(localRef.getTime())) {
+    const rowsWithAbsoluteTimestamps = rows
+      .filter((row) => row?.start_ts && row?.end_ts)
+      .map((row) => ({
+        start: new Date(row.start_ts),
+        end: new Date(row.end_ts),
+        enabled: row.enabled !== false,
+        setpoint: row.enabled === false ? null : Number(row.setpoint ?? null),
+      }))
+      .filter((row) => !Number.isNaN(row.start.getTime()) && !Number.isNaN(row.end.getTime()) && row.end > row.start)
+      .sort((a, b) => a.start.getTime() - b.start.getTime())
+
+    if (rowsWithAbsoluteTimestamps.length > 0) {
+      return rowsWithAbsoluteTimestamps
+    }
+
+    const referenceDate = new Date(referenceTime)
+    const referenceParts = getTimeZoneParts(referenceDate)
+    if (Number.isNaN(referenceDate.getTime()) || !referenceParts) {
       return []
     }
 
-    const refClockMinutes = localRef.getHours() * 60 + localRef.getMinutes()
+    const refClockMinutes = referenceParts.hour * 60 + referenceParts.minute
+
+    // Global accumulating dayOffset — matches backend _materialize_schedule_rows_local exactly
+    let globalDayOffset = 0
+    let previousStartClockMinutes = null
 
     return rows
       .filter((row) => typeof row?.start === 'string' && typeof row?.end === 'string')
@@ -462,31 +631,28 @@ function getOutdoorTemperaturesForOptimization() {
         const [endHour, endMinute] = row.end.split(':').map(Number)
         const startClockMinutes = startHour * 60 + startMinute
         const endClockMinutes = endHour * 60 + endMinute
-        const crossesMidnight = endClockMinutes <= startClockMinutes
-        let dayOffset = 0
 
-        if (crossesMidnight && refClockMinutes < endClockMinutes) {
-          dayOffset = -1
-        } else if (!crossesMidnight && endClockMinutes <= refClockMinutes) {
-          dayOffset = 1
+        if (previousStartClockMinutes === null) {
+          if (startClockMinutes < refClockMinutes) {
+            globalDayOffset = 1
+          }
+        } else if (startClockMinutes < previousStartClockMinutes) {
+          globalDayOffset += 1
         }
+        previousStartClockMinutes = startClockMinutes
 
-        const start = new Date(localRef)
-        start.setHours(startHour, startMinute, 0, 0)
-        start.setDate(start.getDate() + dayOffset)
+        const startDateParts = addDaysToTimeZoneDateParts(referenceParts, globalDayOffset)
+        const start = buildDateFromTimeZoneParts({ ...startDateParts, hour: startHour, minute: startMinute })
 
-        const end = new Date(localRef)
-        end.setHours(endHour, endMinute, 0, 0)
-        end.setDate(end.getDate() + dayOffset)
-        if (crossesMidnight) {
-          end.setDate(end.getDate() + 1)
-        }
+        const endDayOffset = endClockMinutes <= startClockMinutes ? globalDayOffset + 1 : globalDayOffset
+        const endDateParts = addDaysToTimeZoneDateParts(referenceParts, endDayOffset)
+        const end = buildDateFromTimeZoneParts({ ...endDateParts, hour: endHour, minute: endMinute })
 
         return {
           start,
           end,
           enabled: row.enabled !== false,
-          setpoint: row.enabled === false ? null : Number(row.setpoint ?? slider1.value ?? null),
+          setpoint: row.enabled === false ? null : Number(row.setpoint ?? null),
         }
       })
       .filter((row) => row.end > row.start)
@@ -511,31 +677,71 @@ function getOutdoorTemperaturesForOptimization() {
     )
   }
 
-  async function syncTopControlsFromSchedule(rows, referenceTime) {
+  function getScheduleFutureHours(rows, referenceTime) {
+    const materializedRows = materializeScheduleRowsLocal(rows, referenceTime)
+    if (materializedRows.length === 0) {
+      return scheduleWindowHours
+    }
+
+    const effectiveReference = new Date(referenceTime)
+    if (Number.isNaN(effectiveReference.getTime())) {
+      return scheduleWindowHours
+    }
+
+    const latestEndTimestamp = Math.max(...materializedRows.map((row) => row.end.getTime()))
+    const diffHours = Math.max((latestEndTimestamp - effectiveReference.getTime()) / 3600000, 0)
+    return Math.max(scheduleWindowHours, Math.ceil(diffHours))
+  }
+
+  const SETPOINT_DEFAULT = 22
+
+  async function syncTopControlsFromSchedule(rows, referenceTime, { updateSetpoint = true, updateSwitch = true } = {}) {
     const nextRelevantRow = getNextRelevantScheduleRow(rows, referenceTime)
-    const loadedScheduleSetpoint = getScheduleSetpoint(rows)
 
     syncingTopControls.value = true
-    if (loadedScheduleSetpoint != null) {
-      slider1.value = loadedScheduleSetpoint
-    } else if (optimizationContext.value?.setpoint != null) {
-      slider1.value = Number(optimizationContext.value.setpoint)
+
+    if (updateSetpoint) {
+      const activeZoneId = dashboardStore.activeZone?.id
+      const loadedScheduleSetpoint = getScheduleSetpoint(rows)
+      if (loadedScheduleSetpoint != null) {
+        slider1.value = loadedScheduleSetpoint
+        // Keep zone setpoints map in sync with what the schedule says
+        if (activeZoneId != null) {
+          controlStore.zoneSetpoints = {
+            ...controlStore.zoneSetpoints,
+            [activeZoneId]: loadedScheduleSetpoint,
+          }
+        }
+      } else if (activeZoneId != null && controlStore.zoneSetpoints[activeZoneId] != null) {
+        // No schedule rows yet — use the per-zone value set from the topology
+        slider1.value = controlStore.zoneSetpoints[activeZoneId]
+      }
+      // Otherwise keep whatever value the user last set on this slider.
     }
-    if (nextRelevantRow) {
-      switchValue.value = Boolean(nextRelevantRow.enabled)
-    } else if (dashboardTimeGridCurrentRow.value?.hvac_is_on != null) {
-      switchValue.value = Boolean(dashboardTimeGridCurrentRow.value.hvac_is_on)
+
+    if (updateSwitch) {
+      if (nextRelevantRow) {
+        switchValue.value = Boolean(nextRelevantRow.enabled)
+      } else if (dashboardTimeGridCurrentRow.value?.hvac_is_on != null) {
+        switchValue.value = Boolean(dashboardTimeGridCurrentRow.value.hvac_is_on)
+      }
     }
     await nextTick()
     syncingTopControls.value = false
   }
 
   function clearOptimizationResultState() {
+    if (
+      optimizationResult.value === null &&
+      optimizedControl.value.length === 0 &&
+      !showOptimizeAlert.value
+    ) {
+      return
+    }
     optimizedControl.value = []
     optimizedIndoorForecast.value = []
     optimizationResult.value = null
     showOptimizeAlert.value = false
-    chartKey.value += 1
   }
 
   function restoreOptimizationResult(result) {
@@ -555,23 +761,27 @@ function getOutdoorTemperaturesForOptimization() {
     }
 
     optimizationResult.value = result
-    optimizedControl.value = operation.map(value => Boolean(value))
+    optimizedControl.value = operation.map(value => !!value)
     optimizedIndoorForecast.value = temperatures
-    chartKey.value += 1
+    // No chartKey increment — chartData reactive computed picks up the new datasets
   }
 
-  async function loadDashboardSchedule(refNow = null) {
-    const buildingId = dashboardStore.defaultBuilding?.id
+  async function loadDashboardSchedule(refNow = null, futureHours = scheduleWindowHours) {
+    const buildingId = dashboardStore.activeBuilding?.id
     if (!buildingId) {
       return
-  }
+    }
 
   const token = authStore.getJwtToken?.()
-  const query = new URLSearchParams({ future_hours: '3' })
+  const query = new URLSearchParams({ future_hours: String(futureHours) })
   if (refNow) {
     query.set('ref_now', refNow)
   }
 
+  const deviceId = dashboardStore.activeDevice?.id
+  const zoneId = dashboardStore.activeZone?.id
+  if (deviceId) query.set('unit_id', String(deviceId))
+  if (zoneId) query.set('zone_id', String(zoneId))
   const response = await fetch(buildApiUrl(`/dashboard/hvac-schedule/${buildingId}?${query.toString()}`), {
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -580,22 +790,40 @@ function getOutdoorTemperaturesForOptimization() {
   })
 
   if (!response.ok) {
+    scheduleReloading.value = false
     throw new Error(`Failed to load HVAC schedule: ${response.status}`)
-    }
+  }
   
     const payload = await response.json()
-    controlStore.setRawSchedule(payload.rows || [])
-    return payload
+    const rows = payload.rows || []
+    if (rows.length === 0) {
+      const hour = Number.parseInt(
+        new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Athens', hour: '2-digit', hour12: false }).format(new Date()),
+        10,
+      )
+      rows.push({ start: `${String((hour + 1) % 24).padStart(2, '0')}:00`, end: '23:59', enabled: false, setpoint: null })
+    }
+    controlStore.setRawSchedule(rows)
+    scheduleReloading.value = false
+    return { ...payload, rows }
   }
 
-async function saveDashboardSchedule(rows) {
-  const buildingId = dashboardStore.defaultBuilding?.id
+async function saveDashboardSchedule(rows, requestId) {
+  const buildingId = dashboardStore.activeBuilding?.id
   if (!buildingId) {
     return
   }
 
   const token = authStore.getJwtToken?.()
-  const response = await fetch(buildApiUrl(`/dashboard/hvac-schedule/${buildingId}`), {
+  const referenceTime = dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || new Date().toISOString()
+  const futureHours = getScheduleFutureHours(rows, referenceTime)
+  const unitId = dashboardStore.activeDevice?.id
+  const zoneIdForPut = dashboardStore.activeZone?.id
+  const putParams = new URLSearchParams()
+  if (unitId) putParams.set('unit_id', String(unitId))
+  if (zoneIdForPut) putParams.set('zone_id', String(zoneIdForPut))
+  const putQuery = putParams.toString() ? `?${putParams.toString()}` : ''
+  const response = await fetch(buildApiUrl(`/dashboard/hvac-schedule/${buildingId}${putQuery}`), {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -603,8 +831,8 @@ async function saveDashboardSchedule(rows) {
     },
     credentials: 'include',
     body: JSON.stringify({
-      reference_time: dashboardReferenceTime.value,
-      future_hours: 3,
+      reference_time: referenceTime,
+      future_hours: futureHours,
       rows: serializeScheduleRowsForApi(rows),
     }),
   })
@@ -612,13 +840,22 @@ async function saveDashboardSchedule(rows) {
   if (!response.ok) {
     throw new Error(`Failed to update HVAC schedule: ${response.status}`)
   }
-  // Keep the optimistic local schedule instead of overwriting it with the
-  // backend response, which may still return split 5-minute boundary rows.
-  await response.json()
+  const payload = await response.json()
+  if (requestId !== scheduleSaveRequestSequence) {
+    return null
+  }
+  if (!areScheduleRowsEquivalent(controlStore.editableSchedule, payload.rows || [])) {
+    controlStore.setRawSchedule(payload.rows || [])
+  }
+  await syncTopControlsFromSchedule(
+    payload.rows || rows,
+    payload.reference_time || referenceTime,
+    { updateSetpoint: false, updateSwitch: false },
+  )
+  return payload
 }
 
 function handleScheduleChange(rows) {
-  clearOptimizationResultState()
   scheduleSaveMessage.value = ''
 
   if (scheduleSaveMessageTimeout) {
@@ -629,6 +866,7 @@ function handleScheduleChange(rows) {
   void syncTopControlsFromSchedule(
     rows,
     dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || new Date().toISOString(),
+    { updateSetpoint: false, updateSwitch: false },
   )
 
   if (scheduleSaveTimeout) {
@@ -636,9 +874,15 @@ function handleScheduleChange(rows) {
   }
 
   scheduleSaveTimeout = setTimeout(async () => {
+    const requestId = ++scheduleSaveRequestSequence
     scheduleSaving.value = true
     try {
-      await saveDashboardSchedule(rows)
+      await saveDashboardSchedule(rows, requestId)
+      if (requestId !== scheduleSaveRequestSequence) {
+        return
+      }
+      // Schedule already fresh from save response — skip redundant re-fetch
+      await loadDashboardTimeGrid(true, true)
       scheduleSaveMessage.value = 'Schedule updated in the database.'
       scheduleSaveMessageTimeout = setTimeout(() => {
         scheduleSaveMessage.value = ''
@@ -652,25 +896,40 @@ function handleScheduleChange(rows) {
   }, 400)
 }
 
-  async function loadDashboardTimeGrid(force = false) {
-    const buildingId = dashboardStore.defaultBuilding?.id
+  async function loadDashboardTimeGrid(force = false, skipScheduleReload = false) {
+    const buildingId = dashboardStore.activeBuilding?.id
     if (!buildingId) {
       return
-  }
+    }
 
-    const payload = await dashboardStore.loadEfficiencyTimeGrid(buildingId, { force })
-    const schedulePayload = await loadDashboardSchedule(dashboardReferenceTime.value || payload?.current_row?.ts || null)
+    if (skipScheduleReload) {
+      // Called after a user-initiated schedule save — time-grid data is unchanged so skip
+      // the fetch to avoid a chart re-render. Don't touch slider or main switch.
+      const refTime = dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || null
+      await syncTopControlsFromSchedule(controlStore.editableSchedule, refTime, {
+        updateSetpoint: false,
+        updateSwitch: false,
+      })
+      return
+    }
+
+    const unitId = dashboardStore.activeDevice?.id ?? null
+    const payload = await dashboardStore.loadEfficiencyTimeGrid(buildingId, { force, unitId })
+    const refTime = dashboardReferenceTime.value || payload?.current_row?.ts || null
+
+    const schedulePayload = await loadDashboardSchedule(refTime, scheduleWindowHours)
     await syncTopControlsFromSchedule(
-      schedulePayload?.rows || controlStore.schedule,
-      dashboardReferenceTime.value || payload?.current_row?.ts || null,
+      schedulePayload?.rows || controlStore.editableSchedule,
+      refTime,
     )
+
     restoreOptimizationResult(payload?.latest_optimization_result)
   }
 
 const canOptimize = computed(() =>
-  Boolean(dashboardStore.defaultBuilding?.id) &&
+  Boolean(dashboardStore.activeBuilding?.id) &&
   Boolean(optimizationContext.value) &&
-  optimizationContext.value?.is_ready !== false &&
+  missingOptimizationFields.value.length === 0 &&
   scheduleSaving.value === false &&
   optimizeLoading.value === false,
 )
@@ -679,13 +938,10 @@ const optimizeButtonLabel = computed(() => {
   if (optimizeLoading.value) {
     return 'Optimizing...'
   }
-  if (scheduleSaving.value) {
-    return 'Saving schedule...'
-  }
   if (!optimizationContext.value) {
     return 'Loading optimization...'
   }
-  if (optimizationContext.value?.is_ready === false) {
+  if (missingOptimizationFields.value.length > 0) {
     return 'Optimization unavailable'
   }
   return 'Optimize'
@@ -770,7 +1026,7 @@ async function runOptimization() {
     const temperatures = Array.isArray(result.temperatures) ? result.temperatures.slice(1, 13) : []
 
     optimizationResult.value = result
-    optimizedControl.value = operation.map(value => Boolean(value))
+    optimizedControl.value = operation.map(value => !!value)
     optimizedIndoorForecast.value = temperatures
 
     chartKey.value += 1
@@ -813,16 +1069,11 @@ const futurePoints = 73; // 6h * 60 / 5 + 1 = 73
 const totalPoints = pastPoints + futurePoints;
 const startDate = new Date(now.getTime() - pastPoints * 5 * 60000);
 function formatLocalDateTimeLabel(value) {
-  const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) {
+  const parts = getTimeZoneParts(value)
+  if (!parts) {
     return String(value)
   }
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}`
+  return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')} ${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`
 }
 
 const chartLabels = Array.from({ length: totalPoints }, (_, i) => {
@@ -831,62 +1082,43 @@ const chartLabels = Array.from({ length: totalPoints }, (_, i) => {
 });
 
 // Helper function to generate control schedule data
-function isScheduleActiveAtTimestamp(ts, schedule) {
-  const timestamp = new Date(ts)
-  if (Number.isNaN(timestamp.getTime()) || !Array.isArray(schedule)) {
-    return false
-  }
-
-  for (const period of schedule) {
-    if (!period?.enabled || typeof period.start !== 'string' || typeof period.end !== 'string') {
-      continue
-    }
-
-    const [startHour, startMinute] = period.start.split(':').map(Number)
-    const [endHour, endMinute] = period.end.split(':').map(Number)
-    if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) {
-      continue
-    }
-
-    const scheduleStart = new Date(timestamp)
-    scheduleStart.setHours(startHour, startMinute, 0, 0)
-    const scheduleEnd = new Date(timestamp)
-    scheduleEnd.setHours(endHour, endMinute, 0, 0)
-
-    if (scheduleEnd <= scheduleStart) {
-      if (timestamp < scheduleEnd) {
-        scheduleStart.setDate(scheduleStart.getDate() - 1)
-      } else {
-        scheduleEnd.setDate(scheduleEnd.getDate() + 1)
-      }
-    }
-
-    if (timestamp >= scheduleStart && timestamp < scheduleEnd) {
-      return true
-    }
-  }
-
-  return false
-}
-
-function generateControlScheduleFromRows(rows, controlStore) {
+function generateControlScheduleFromRows(rows, scheduleRows, referenceTime) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return []
   }
 
-  return rows.map(row => (isScheduleActiveAtTimestamp(row?.ts, controlStore.schedule) ? 0.5 : 0))
+  const materializedSchedule = materializeScheduleRowsLocal(scheduleRows, referenceTime)
+  return rows.map((row) => {
+    const timestamp = new Date(row?.ts)
+    if (Number.isNaN(timestamp.getTime())) {
+      return 0
+    }
+
+    return materializedSchedule.some(
+      (period) => period.enabled && timestamp >= period.start && timestamp < period.end,
+    )
+      ? 0.5
+      : 0
+  })
 }
 
 function hasOptimizedOverlay() {
   return optimizedControl.value.length === 12 && optimizedIndoorForecast.value.length === 12
 }
 
-function buildDashboardOptimizedDatasets(labelCount) {
+function buildDashboardOptimizedDatasets(labelCount, rows) {
   if (!hasOptimizedOverlay()) {
     return []
   }
 
-  const startIdx = Math.max(labelCount - 36, 0)
+  let startIdx = Math.max(labelCount - 36, 0)
+  const windowStart = optimizationResult.value?.window_start
+  if (windowStart && Array.isArray(rows) && rows.length) {
+    const wsMs = new Date(windowStart).getTime()
+    const found = rows.findIndex(row => new Date(row.ts).getTime() >= wsMs)
+    if (found !== -1) startIdx = found
+  }
+
   const optControlArr = new Array(labelCount).fill(null)
   const optIndoorArr = new Array(labelCount).fill(null)
 
@@ -929,11 +1161,16 @@ function buildDashboardOptimizedDatasets(labelCount) {
 function buildDashboardChartData(rows) {
   const labels = rows.map(row => formatLocalDateTimeLabel(row.ts))
   const referenceTime = dashboardReferenceTime.value || dashboardTimeGridCurrentRow.value?.ts || new Date().toISOString()
-  const indoor = rows.map(row => (row.ts <= referenceTime ? row.temperature : null))
-  const forecast = rows.map(row => (row.ts >= referenceTime ? row.outdoor_temperature : null))
+  const refMs = new Date(referenceTime).getTime()
+  const indoor = rows.map(row => (new Date(row.ts).getTime() <= refMs ? row.temperature : null))
+  const forecast = rows.map(row => (new Date(row.ts).getTime() >= refMs ? row.outdoor_temperature : null))
   const upper = forecast.map(value => (typeof value === 'number' ? value + 0.3 : null))
   const lower = forecast.map(value => (typeof value === 'number' ? value - 0.3 : null))
-  const userSchedule = generateControlScheduleFromRows(rows, controlStore)
+  const userSchedule = generateControlScheduleFromRows(
+    rows,
+    chartSchedule.value,
+    referenceTime,
+  )
   const backendSchedule = rows.map(row => row.hvac_is_on ? 0.5 : 0)
 
   const datasets = [
@@ -983,7 +1220,10 @@ function buildDashboardChartData(rows) {
     },
     {
       label: 'Control Schedule',
-      data: controlStore.scheduleLoaded === true ? userSchedule : backendSchedule,
+      data: (() => {
+        if (scheduleReloading.value) return rows.map(() => null)
+        return controlStore.scheduleLoaded === true ? userSchedule : backendSchedule
+      })(),
       type: 'line',
       borderColor: '#388e3c',
       backgroundColor: 'rgba(76,175,80,0.1)',
@@ -994,7 +1234,7 @@ function buildDashboardChartData(rows) {
       pointRadius: 0,
       order: 2
     },
-    ...buildDashboardOptimizedDatasets(labels.length),
+    ...buildDashboardOptimizedDatasets(labels.length, rows),
   ]
 
   return { labels, datasets }
@@ -1025,9 +1265,26 @@ const chartOptions = computed(() => {
   return {
     responsive: true,
     maintainAspectRatio: false,
-    animation: {
-      duration: 420,
-      easing: 'easeOutQuart',
+    // Initial draw: left-to-right reveal. Data updates: short smooth fade-in.
+    animation: { duration: 0 },
+    animations: {
+      x: {
+        type: 'number',
+        easing: 'easeInOutSine',
+        duration: (ctx) => (ctx.initial ? 600 : 0),
+        from: (ctx) => (ctx.initial ? Number.NaN : undefined),
+        delay: (ctx) => (ctx.initial ? ctx.dataIndex * 2 : 0),
+      },
+      y: {
+        type: 'number',
+        easing: 'easeOutQuart',
+        duration: (ctx) => (ctx.initial ? 500 : 280),
+        from: (ctx) => (ctx.initial ? (ctx.chart.scales?.y?.min ?? 0) : undefined),
+        delay: (ctx) => (ctx.initial ? ctx.dataIndex * 2 : 0),
+      },
+    },
+    transitions: {
+      active: { animation: { duration: 280 } },
     },
     layout: {
       padding: {
@@ -1136,8 +1393,9 @@ const chartOptions = computed(() => {
             if (index % 6 !== 0) {
               return ''
             }
-            const label = chartLabels[index] || ''
-            return label.slice(11, 16)
+            const labels = chartData.value?.labels
+            const label = Array.isArray(labels) ? (labels[index] ?? '') : ''
+            return typeof label === 'string' ? label.slice(11, 16) : ''
           },
         },
       }
@@ -1190,6 +1448,11 @@ watch([switchValue, slider1, slider2], ([newSwitch, newSlider1, newSlider2]) => 
     slider1: newSlider1,
     slider2: newSlider2
   })
+}, { immediate: true })
+
+// Keep local slider in sync if another view (e.g. topology) updates the store value
+watch(() => controlStore.preferences.slider1, (storeVal) => {
+  if (storeVal !== slider1.value) slider1.value = storeVal
 })
 
 watch(slider1, (newSlider1, previousSlider1) => {
@@ -1197,24 +1460,52 @@ watch(slider1, (newSlider1, previousSlider1) => {
     syncingTopControls.value ||
     newSlider1 === previousSlider1 ||
     controlStore.scheduleLoaded !== true ||
-    !Array.isArray(controlStore.schedule) ||
-    controlStore.schedule.length === 0
+    !Array.isArray(controlStore.editableSchedule) ||
+    controlStore.editableSchedule.length === 0
   ) {
     return
   }
 
-  const nextSchedule = controlStore.schedule.map((row) => ({
+  // Persist per-zone setpoint immediately so zone switches can restore it
+  const activeZoneId = dashboardStore.activeZone?.id
+  if (activeZoneId != null) {
+    controlStore.zoneSetpoints = { ...controlStore.zoneSetpoints, [activeZoneId]: Number(newSlider1) }
+  }
+
+  const nextSchedule = controlStore.editableSchedule.map((row) => ({
     ...row,
     setpoint: row.enabled ? Number(newSlider1) : null,
   }))
 
-  clearOptimizationResultState()
-  controlStore.setSchedule(nextSchedule)
+  // Don't write rawSchedule here — it would invalidate chartData on every tick while
+  // the user drags the slider.
   handleScheduleChange(nextSchedule)
 })
 
+async function handleDeviceChange(deviceId) {
+  scheduleReloading.value = true
+  dashboardStore.setSelectedDevice(deviceId)
+  controlStore.clearSchedule()
+  clearOptimizationResultState()
+  dismissOptimizationReadiness.value = false
+  const buildingId = dashboardStore.activeBuilding?.id
+  if (buildingId) {
+    await dashboardStore.loadZonesForUnit(buildingId, deviceId)
+  }
+  await loadDashboardTimeGrid(true)
+}
+
+async function handleZoneChange(zoneId) {
+  scheduleReloading.value = true
+  dashboardStore.setSelectedZone(zoneId)
+  controlStore.clearSchedule()
+  clearOptimizationResultState()
+  dismissOptimizationReadiness.value = false
+  await loadDashboardTimeGrid(true)
+}
+
 watch(
-  () => dashboardStore.defaultBuilding?.id,
+  () => dashboardStore.activeBuilding?.id,
   async (buildingId, previousBuildingId) => {
     if (buildingId && (buildingId !== previousBuildingId || dashboardTimeGridRows.value.length === 0)) {
       if (buildingId !== previousBuildingId) {
@@ -1288,7 +1579,13 @@ function dropdownLabel() {
 }
 
 onMounted(async () => {
-  await dashboardStore.loadDashboardData(false)
+  await dashboardStore.loadDashboardData(true)
+  const buildingId = dashboardStore.activeBuilding?.id
+  const deviceId = dashboardStore.activeDevice?.id
+  if (buildingId && deviceId) {
+    await dashboardStore.loadZonesForUnit(buildingId, deviceId)
+  }
+  loadDashboardTimeGrid(true)
 })
 
 </script>
@@ -1302,13 +1599,104 @@ onMounted(async () => {
   align-items: stretch;
 }
 
+/* ── Chart wrapper — fixed height, never reflows ── */
 .chart-wrapper {
+  position: relative;
   border: 1px solid rgba(37, 99, 235, 0.08);
   border-radius: 20px;
-  background:
-    linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
   padding: 1rem 1rem 0.5rem;
+  /* Lock height so layout never shifts when data changes */
+  height: 620px;
+  min-height: 620px;
+  overflow: hidden;
+  contain: layout size;
+}
+
+/* Canvas fills the wrapper exactly */
+.chart-canvas-host {
+  width: 100%;
+  height: 100%;
+  transition: opacity 0.22s ease;
+}
+
+.chart-canvas-host--loading {
+  opacity: 0.35;
+}
+
+/* ── Overlay ── */
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 20px;
+  pointer-events: none;
+}
+
+.chart-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  background: rgba(248, 250, 255, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.chart-overlay__spinner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.chart-overlay__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #334155;
+  letter-spacing: 0.01em;
+}
+
+/* SVG spinner ring */
+.chart-spinner-ring {
+  width: 44px;
+  height: 44px;
+  animation: chart-spin 1.1s linear infinite;
+}
+
+.chart-spinner-ring__track {
+  stroke: rgba(37, 99, 235, 0.12);
+}
+
+.chart-spinner-ring__arc {
+  stroke: #2563eb;
+  animation: chart-arc 1.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes chart-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes chart-arc {
+  0%   { stroke-dashoffset: 280; }
+  50%  { stroke-dashoffset: 60; }
+  100% { stroke-dashoffset: 280; }
+}
+
+/* Overlay enter/leave transitions */
+.chart-overlay-enter-active,
+.chart-overlay-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.chart-overlay-enter-from,
+.chart-overlay-leave-to {
+  opacity: 0;
 }
 
 .control-panel-card {
@@ -1588,6 +1976,26 @@ onMounted(async () => {
 
 }
 
+:global([data-coreui-theme='dark']) .efficiency-tool-page .chart-wrapper {
+  border-color: rgba(148, 163, 184, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(30, 41, 59, 0.98) 0%, rgba(15, 23, 42, 1) 100%);
+  box-shadow: 0 22px 46px rgba(2, 6, 23, 0.34);
+}
+
+:global([data-coreui-theme='dark']) .efficiency-tool-page .chart-overlay__backdrop {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+:global([data-coreui-theme='dark']) .efficiency-tool-page .chart-overlay__label {
+  color: #cbd5e1;
+}
+
+:global([data-coreui-theme='dark']) .efficiency-tool-page .chart-spinner-ring__arc {
+  stroke: #60a5fa;
+}
+
 :global([data-coreui-theme='dark']) .efficiency-tool-page .control-panel-card {
   border-color: rgba(148, 163, 184, 0.18);
   box-shadow: 0 20px 42px rgba(2, 6, 23, 0.32);
@@ -1623,14 +2031,6 @@ onMounted(async () => {
 
 :global([data-coreui-theme='dark']) .efficiency-tool-page .control-panel-card .form-range::-moz-range-track {
   background: rgba(148, 163, 184, 0.28);
-}
-
-:global([data-coreui-theme='dark']) .efficiency-tool-page .chart-wrapper {
-  border-color: rgba(148, 163, 184, 0.18);
-  background:
-    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 34%),
-    linear-gradient(180deg, rgba(30, 41, 59, 0.98) 0%, rgba(15, 23, 42, 1) 100%);
-  box-shadow: 0 22px 46px rgba(2, 6, 23, 0.34);
 }
 
 

@@ -1,12 +1,20 @@
 import subprocess
+import os
+
+# Directory that contains alembic.ini — always the same as this utils/ parent (api/)
+_API_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # --- Alembic migration auto-upgrade on startup ---
 def run_alembic_upgrade():
     """Run Alembic upgrade head to apply all migrations."""
     try:
-        result = subprocess.run([
-            "alembic", "upgrade", "head"
-        ], check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=_API_DIR,   # must run from the directory containing alembic.ini
+        )
         print("[main.py] Alembic migration output:\n" + result.stdout)
     except subprocess.CalledProcessError as e:
         print(f"[main.py] Alembic migration failed: {e.stderr}")

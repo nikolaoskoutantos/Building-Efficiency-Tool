@@ -2,5 +2,23 @@
     "sonarlint.connectedMode.project": {
         "connectionId": "nikolaoskoutantos",
         "projectKey": "nikolaoskoutantos_Building-Efficiency-Tool"
-    }
+    },
+    "sonarlint.analysisExcludesStandalone": "**/anaconda3/**,**/Anaconda3/**,**/miniconda3/**,**/site-packages/**,**/Lib/site-packages/**",
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    "python.analysis.exclude": [
+        "**/anaconda3/**",
+        "**/Anaconda3/**",
+        "**/miniconda3/**",
+        "**/site-packages/**",
+        "**/Lib/site-packages/**",
+        "**/typeshed-fallback/**"
+    ],
+    "python.analysis.ignore": [
+        "**/anaconda3/**",
+        "**/Anaconda3/**",
+        "**/miniconda3/**",
+        "**/site-packages/**",
+        "**/Lib/site-packages/**",
+        "**/typeshed-fallback/**"
+    ]
 }

@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MQTT Topic Routing Configuration
+#
+# The worker evaluates the SECOND segment of a topic (parts[1]) against the
+# lists below.  Topic structure: {device_key}/{segment}[/{anything}...]
+#
+# Rules (evaluated in order):
+#   heartbeat  →  update device last_seen / connection_status only, no sensor data
+#   command    →  route to command-ack handler
+#   <default>  →  route to sensor data extraction  (the universal fallback)
+#
+# The default catch-all means you never need to list every vendor subtopic here.
+# Only add entries when you want to OVERRIDE the default sensor behaviour.
+# ─────────────────────────────────────────────────────────────────────────────
+
+routing:
+
+  # {device_key}/status  (exactly 2 segments)
+  # Pure heartbeat — updates last_seen and connection_status.
+  # Shelly's deeper   {device_key}/status/switch:0   is NOT matched here
+  # (it has 3 segments) and falls through to the sensor default. Good.
+  heartbeat:
+    - status
+
+  # Command acknowledgement from device.
+  command:
+    - cmd
+    - command     # Shelly uses  {device_key}/command/{component}
+
+  # Everything else is treated as sensor data.
+  # Examples that fall through to the default:
+  #   {device_key}/sensor             custom / simulator
+  #   {device_key}/data               generic IoT
+  #   {device_key}/telemetry          Azure IoT / AWS IoT Core style
+  #   {device_key}/status/switch:0    Shelly PM  (3 segments, not matched above)
+  #   {device_key}/status/pm1:0       Shelly PM Mini
+  #   {device_key}/status/temperature:0  Shelly temperature add-on
+  #   {device_key}/STATE              Tasmota
+  #   {device_key}/tele/SENSOR        Tasmota telemetry subtopic
+  #   {device_key}/attributes         Zigbee2MQTT
+  #
+  # To route a new vendor without code changes, just leave them in the default
+  # or add an explicit override below if needed.

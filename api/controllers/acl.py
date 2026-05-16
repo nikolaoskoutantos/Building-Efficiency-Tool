@@ -7,6 +7,7 @@ from db import SessionLocal
 from models.hvac_unit import HVACUnit
 from models.sensor import Sensor
 import logging
+import os
 
 router = APIRouter(tags=["Device & User Authentication"])
 logger = logging.getLogger("uvicorn.error")
@@ -34,33 +35,15 @@ def allow():
     logger.info("ALLOW")
     return JSONResponse({"result": "allow"})
 
-def parse_and_validate_topic(topic, building_id, device_key):
+def parse_and_validate_topic(topic, device_key):
+    """Validate topic format: {device_key}/{resource}"""
     parts = topic.split("/")
-    if len(parts) < 4:
+    if len(parts) < 2:
         return None, None, "topic_too_short"
-    if parts[0] != "building" or parts[2] != "device":
-        return None, None, "invalid_root"
-    try:
-        topic_building_id = int(parts[1])
-    except Exception:
-        return None, None, "invalid_building_id"
-    topic_device_key = parts[3]
-    if topic_building_id != int(building_id):
-        return None, None, "building_mismatch"
-    if topic_device_key != device_key:
+    if parts[0] != device_key:
         return None, None, "device_key_mismatch"
-
-    # Device-level topic: building/{building_id}/device/{device_key}/{resource}
-    if len(parts) == 5:
-        resource = parts[4]
-        return parts, resource, None
-
-    # Sensor-level topic: building/{building_id}/device/{device_key}/sensor/{sensor_id}/{resource}
-    if len(parts) == 7 and parts[4] == "sensor":
-        resource = parts[6]
-        return parts, resource, None
-
-    return None, None, "invalid_topic_structure"
+    resource = parts[1]
+    return parts, resource, None
 
 def check_action_policy(action, resource):
     if action not in ("publish", "subscribe"):
@@ -79,12 +62,15 @@ def check_action_policy(action, resource):
         return True, None
     if action == "subscribe" and resource in sensor_subscribe:
         return True, None
+    # Allow direct sensor publish: {device_key}/{sensor_id} where sensor_id is an integer
+    if action == "publish" and resource.isdigit():
+        return True, None
     return False, "not_allowed_for_resource"
 
 def check_sensor_ownership(db, parts, hvac_unit_id):
-    if len(parts) < 6:
+    if len(parts) < 2:
         return False, "sensor_topic_too_short"
-    sensor_id_str = parts[5]
+    sensor_id_str = parts[1]
     try:
         sensor_id = int(sensor_id_str)
     except Exception:
@@ -98,6 +84,39 @@ def check_sensor_ownership(db, parts, hvac_unit_id):
     return True, None
 
 
+def check_backend_service_acl(username, action, topic):
+    service_user = os.environ.get("MQTT_SERVICE_USER", "")
+    if not service_user or username != service_user:
+        return False, None
+
+    parts = topic.split("/")
+    resource = parts[1] if len(parts) >= 2 else ""
+    # Backend service: may subscribe to anything, publish only cmd/config
+    if action == "subscribe":
+        return True, None
+    if action == "publish" and resource in ("cmd", "config"):
+        return True, None
+    return True, "backend_service_topic_not_permitted"
+
+
+def get_device_context(db, username):
+    device = db.query(HVACUnit).filter(HVACUnit.device_key == username).first()
+    if not device:
+        return None, "device_not_found"
+
+    building_id = getattr(device, "building_id", None)
+    device_key = (getattr(device, "device_key", None) or "").strip()
+    hvac_unit_id = getattr(device, "id", None)
+    if building_id is None or device_key == "" or hvac_unit_id is None:
+        return None, "missing_device_fields"
+
+    return {
+        "building_id": building_id,
+        "device_key": device_key,
+        "hvac_unit_id": hvac_unit_id,
+    }, None
+
+
 @router.post("/device/acl")
 def device_acl(body: EMQXACLRequest, db: Annotated[Session, Depends(get_db)]):
     username = (body.username or "").strip()
@@ -106,16 +125,21 @@ def device_acl(body: EMQXACLRequest, db: Annotated[Session, Depends(get_db)]):
 
     try:
         logger.info(f"ACL HIT username={username!r} action={action!r} topic={topic!r}")
-        device = db.query(HVACUnit).filter(HVACUnit.device_key == username).first()
-        if not device:
-            return deny("device_not_found")
-        building_id = getattr(device, "building_id", None)
-        device_key  = (getattr(device, "device_key", None) or "").strip()
-        hvac_unit_id = getattr(device, "id", None)
-        if building_id is None or device_key == "" or hvac_unit_id is None:
-            return deny("missing_device_fields")
 
-        parts, resource, topic_error = parse_and_validate_topic(topic, building_id, device_key)
+        is_backend_user, backend_error = check_backend_service_acl(username, action, topic)
+        if is_backend_user:
+            if backend_error:
+                return deny(backend_error)
+            return allow()
+
+        device_context, device_error = get_device_context(db, username)
+        if device_error:
+            return deny(device_error)
+
+        parts, resource, topic_error = parse_and_validate_topic(
+            topic,
+            device_context["device_key"],
+        )
         if topic_error:
             return deny(topic_error)
 
@@ -123,12 +147,14 @@ def device_acl(body: EMQXACLRequest, db: Annotated[Session, Depends(get_db)]):
         if not ok:
             return deny(action_error)
 
-        # Sensor-level topic: check sensor ownership
-        if len(parts) == 7 and parts[4] == "sensor":
-            ok, sensor_error = check_sensor_ownership(db, parts, hvac_unit_id)
-            if not ok:
+        if resource.isdigit():
+            owns_sensor, sensor_error = check_sensor_ownership(
+                db,
+                parts,
+                device_context["hvac_unit_id"],
+            )
+            if not owns_sensor:
                 return deny(sensor_error)
-            return allow()
 
         return allow()
     except Exception:

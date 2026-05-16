@@ -6,6 +6,7 @@ import bcrypt
 from sqlalchemy import and_
 from db.connection import SessionLocal
 from models.optimization import OptimizationResult
+from utils.unit_resolver import canonicalize_unit
 
 TESTER_CONFIGS = [
     {
@@ -21,6 +22,7 @@ TESTER_CONFIGS = [
         "room": "101",
         "zone": "A",
         "central_unit": "CU1",
+        "skip_primary_device": True,
     },
     {
         "wallet_address": "0x5d79CedDb741E02B0226BdD7ac1AD22F8e81c1AD",
@@ -153,13 +155,39 @@ TESTER_CONFIGS = [
         "room": "102",
         "zone": "A",
         "central_unit": "CU1",
+        "skip_primary_device": True,
     },
 ]
 
+# Canonical sensor type → unit symbol mapping used for generic tester buildings.
+# Symbols must match entries in the sensor_units table (seeded at cold-start).
 SENSOR_DEFINITIONS = [
-    ("temperature", "celsius"),
+    ("temperature", "°C"),
     ("presence", "bool"),
     ("energy", "kWh"),
+]
+
+# All canonical sensor units. Must stay in sync with schema / migration seed data.
+CANONICAL_UNITS = [
+    # symbol, quantity, display_name, aliases, si_symbol, conversion_factor, aggregation_method
+    ("°C",   "temperature",   "Degrees Celsius",     ["celsius","degc","deg_c","degree_celsius","degrees_celsius","c"],      "K",   None,        "mean"),
+    ("°F",   "temperature",   "Degrees Fahrenheit",  ["fahrenheit","degf","deg_f","degree_fahrenheit"],                      "K",   None,        "mean"),
+    ("K",    "temperature",   "Kelvin",              ["kelvin"],                                                              "K",   1.0,         "mean"),
+    ("%",    "ratio",         "Percent",             ["%rh","pct","percent","humidity_pct","humidity_%"],                    None,  0.01,        "mean"),
+    ("W",    "power",         "Watt",                ["watt","watts"],                                                        "W",   1.0,         "mean"),
+    ("kW",   "power",         "Kilowatt",            ["kilowatt","kilowatts"],                                                "W",   1000.0,      "mean"),
+    ("kWh",  "energy",        "Kilowatt-hour",       ["kwh","kilowatt_hour","kilowatt_hours","kilowatthour"],                "J",   3_600_000.0, "sum"),
+    ("Wh",   "energy",        "Watt-hour",           ["wh","watt_hour","watthour"],                                          "J",   3_600.0,     "sum"),
+    ("A",    "current",       "Ampere",              ["ampere","amp","amps","amperes"],                                      "A",   1.0,         "mean"),
+    ("V",    "voltage",       "Volt",                ["volt","volts"],                                                        "V",   1.0,         "mean"),
+    ("ppm",  "concentration", "Parts per million",   ["parts_per_million","co2_ppm"],                                        None,  None,        "mean"),
+    ("hPa",  "pressure",      "Hectopascal",         ["hpa","hectopascal","mbar","millibar","mb"],                          "Pa",  100.0,       "mean"),
+    ("Pa",   "pressure",      "Pascal",              ["pascal","pa"],                                                         "Pa",  1.0,         "mean"),
+    ("m/s",  "speed",         "Metres per second",   ["m_s","ms","meters_per_second","metres_per_second","meter_per_second"], "m/s", 1.0,         "mean"),
+    ("mm",   "length",        "Millimetre",          ["millimeter","millimetre","millimeters","millimetres"],                "m",   0.001,       "sum"),
+    ("bool", "dimensionless", "Boolean",             ["boolean","on_off","binary","true_false"],                             None,  None,        "majority"),
+    ("lx",   "illuminance",   "Lux",                 ["lux"],                                                                 "lx",  1.0,         "mean"),
+    ("dB",   "sound_level",   "Decibel",             ["decibel","decibels"],                                                 None,  None,        "mean"),
 ]
 
 MOCK_SERVICES = [
@@ -362,11 +390,10 @@ def ensure_user_building_mapping(db, user, building, role, UserBuilding):
 
 
 def get_or_create_hvac_unit(db, building, config, HVACUnit):
+    unit_name = config.get("central_unit") or config.get("name", "default-unit")
     hvac_unit = db.query(HVACUnit).filter_by(
         building_id=building.id,
-        room=config["room"],
-        zone=config["zone"],
-        central_unit=config["central_unit"],
+        name=unit_name,
     ).first()
 
     if not hvac_unit:
@@ -375,9 +402,8 @@ def get_or_create_hvac_unit(db, building, config, HVACUnit):
         now = datetime.datetime.now().isoformat()
         hvac_unit = HVACUnit(
             building_id=building.id,
-            room=config["room"],
-            zone=config["zone"],
-            central_unit=config["central_unit"],
+            name=unit_name,
+            unit_type=config.get("unit_type", "unknown"),
             device_key=device_key,
             device_secret_hash=device_secret_hash,
             device_secret_rotated_at=now,
@@ -400,7 +426,55 @@ def get_or_create_hvac_unit(db, building, config, HVACUnit):
     return hvac_unit
 
 
-def get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sensor, payload_path=None):
+def seed_sensor_units(db, SensorUnit):
+    """Ensure all canonical sensor units exist in the DB (idempotent)."""
+    existing_rows = {row.symbol: row for row in db.query(SensorUnit).all()}
+    existing = set(existing_rows.keys())
+    new_rows = [
+        SensorUnit(
+            symbol=symbol,
+            quantity=quantity,
+            display_name=display_name,
+            aliases=aliases,
+            si_symbol=si_symbol,
+            conversion_factor=conversion_factor,
+            aggregation_method=aggregation_method,
+        )
+        for symbol, quantity, display_name, aliases, si_symbol, conversion_factor, aggregation_method
+        in CANONICAL_UNITS
+        if symbol not in existing
+    ]
+    updated = 0
+    for symbol, quantity, display_name, aliases, si_symbol, conversion_factor, aggregation_method in CANONICAL_UNITS:
+        row = existing_rows.get(symbol)
+        if not row:
+            continue
+        if getattr(row, "aggregation_method", None) != aggregation_method:
+            row.aggregation_method = aggregation_method
+            updated += 1
+    if new_rows:
+        db.bulk_save_objects(new_rows)
+    if new_rows or updated:
+        db.commit()
+        print(f"📐 Seeded {len(new_rows)} canonical sensor unit(s), updated {updated}")
+    else:
+        print("📐 Sensor units already seeded")
+
+
+def get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sensor, payload_path=None, label=None, zone_id=None, is_controllable=False, command_payload_template=None):
+    # Prefer explicit label, then a payload_path-based slug, then type-id fallback.
+    # This prevents name collisions when multiple sensors of the same type exist
+    # on the same HVACUnit (e.g. Florence KNX rooms all share one unit).
+    if label:
+        sensor_name = label
+    elif payload_path:
+        sensor_name = f"{sensor_type}-{payload_path.replace('/', '_')}-{hvac_unit.id}"
+    else:
+        sensor_name = f"{sensor_type}-{hvac_unit.id}"
+
+    # Resolve unit string → canonical SensorUnit row (if table exists)
+    canonical_unit, unit_id = canonicalize_unit(unit, db)
+
     if payload_path:
         sensor = db.query(Sensor).filter_by(
             building_id=building.id,
@@ -411,41 +485,35 @@ def get_or_create_sensor(db, building, hvac_unit, config, sensor_type, unit, Sen
         sensor = db.query(Sensor).filter_by(
             building_id=building.id,
             hvac_unit_id=hvac_unit.id,
-            type=sensor_type,
-            room=config["room"],
-            zone=config["zone"],
-            central_unit=config["central_unit"],
+            sensor_type=sensor_type,
         ).first()
 
     if not sensor:
         sensor = Sensor(
             building_id=building.id,
             hvac_unit_id=hvac_unit.id,
-            type=sensor_type,
-            lat=float(building.lat),
-            lon=float(building.lon),
-            rate_of_sampling=5.0,
-            unit=unit,
-            room=config["room"],
-            zone=config["zone"],
-            central_unit=config["central_unit"],
+            name=sensor_name,
+            sensor_type=sensor_type,
+            unit=canonical_unit,
+            unit_id=unit_id,
             payload_path=payload_path,
+            zone_id=zone_id,
+            is_controllable=is_controllable,
+            command_payload_template=command_payload_template,
         )
         db.add(sensor)
         db.commit()
         db.refresh(sensor)
-        print(f"📟 Created sensor {sensor_type} id={sensor.id} for {building.name}")
+        print(f"📟 Created sensor {sensor_type} ({canonical_unit}) id={sensor.id} for {building.name}")
     else:
         updated = False
         for field, value in (
-            ("type", sensor_type),
-            ("unit", unit),
-            ("room", config["room"]),
-            ("zone", config["zone"]),
-            ("central_unit", config["central_unit"]),
+            ("sensor_type", sensor_type),
+            ("unit", canonical_unit),
+            ("unit_id", unit_id),
             ("payload_path", payload_path),
-            ("lat", float(building.lat)),
-            ("lon", float(building.lon)),
+            ("is_controllable", is_controllable),
+            ("command_payload_template", command_payload_template),
         ):
             if getattr(sensor, field) != value:
                 setattr(sensor, field, value)
@@ -469,7 +537,8 @@ def build_default_device_config(config):
 
 
 def iter_config_devices(config):
-    yield build_default_device_config(config)
+    if not config.get("skip_primary_device", False):
+        yield build_default_device_config(config)
     for device_config in config.get("extra_devices", []):
         yield device_config
 
@@ -511,7 +580,344 @@ def get_or_create_mock_services(db, Service):
             print(f"🛰️ Service already exists: {service_payload['name']}")
 
 
-def seed_building_timeseries(db, building, hvac_unit, sensors, user_id, start, end, WeatherData, SensorData, HVACScheduleInterval):
+# ---------------------------------------------------------------------------
+# Topology helpers: rooms, thermostats, zone↔room and zone↔thermostat links
+# ---------------------------------------------------------------------------
+
+def get_or_create_room(db, building, room_name, Room):
+    room = db.query(Room).filter_by(building_id=building.id, name=room_name).first()
+    if not room:
+        room = Room(building_id=building.id, name=room_name)
+        db.add(room)
+        db.commit()
+        db.refresh(room)
+        print(f"🚪 Created room '{room_name}' for {building.name}")
+    return room
+
+
+def get_or_create_thermostat(db, building, thermostat_name, Thermostat, is_controllable=False, external_bms_id=None):
+    thermostat = db.query(Thermostat).filter_by(building_id=building.id, name=thermostat_name).first()
+    if not thermostat:
+        thermostat = Thermostat(
+            building_id=building.id,
+            name=thermostat_name,
+            is_controllable=is_controllable,
+            external_bms_id=external_bms_id,
+        )
+        db.add(thermostat)
+        db.commit()
+        db.refresh(thermostat)
+        print(f"🌡️  Created thermostat '{thermostat_name}' (controllable={is_controllable}, bms_id={external_bms_id}) for {building.name}")
+    else:
+        updated = False
+        if thermostat.is_controllable != is_controllable:
+            thermostat.is_controllable = is_controllable
+            updated = True
+        if external_bms_id and thermostat.external_bms_id != external_bms_id:
+            thermostat.external_bms_id = external_bms_id
+            updated = True
+        if updated:
+            db.commit()
+    return thermostat
+
+
+def get_or_create_zone_room_link(db, zone, room, ZoneRoom):
+    link = db.query(ZoneRoom).filter_by(zone_id=zone.id, room_id=room.id).first()
+    if not link:
+        link = ZoneRoom(zone_id=zone.id, room_id=room.id, weight=1.0)
+        db.add(link)
+        db.commit()
+        print(f"🔗 Linked room '{room.name}' to zone '{zone.name}'")
+    return link
+
+
+def get_or_create_zone_thermostat_link(db, zone, thermostat, ZoneThermostat):
+    link = db.query(ZoneThermostat).filter_by(zone_id=zone.id, thermostat_id=thermostat.id).first()
+    if not link:
+        link = ZoneThermostat(zone_id=zone.id, thermostat_id=thermostat.id, role="primary", control_weight=1.0)
+        db.add(link)
+        db.commit()
+        print(f"🔗 Linked thermostat '{thermostat.name}' to zone '{zone.name}'")
+    return link
+
+
+def get_or_create_zone(db, building, zone_name, HVACZone):
+    zone = db.query(HVACZone).filter_by(building_id=building.id, name=zone_name).first()
+    if not zone:
+        zone = HVACZone(building_id=building.id, name=zone_name, zone_type="thermal")
+        db.add(zone)
+        db.commit()
+        db.refresh(zone)
+        print(f"🗺️  Created zone '{zone_name}' for {building.name}")
+    else:
+        print(f"🗺️  Zone '{zone_name}' already exists for {building.name}")
+    return zone
+
+
+def get_or_create_zone_hvac_link(db, zone, hvac_unit, ZoneHVACUnit):
+    link = db.query(ZoneHVACUnit).filter_by(zone_id=zone.id, hvac_unit_id=hvac_unit.id).first()
+    if not link:
+        link = ZoneHVACUnit(
+            zone_id=zone.id,
+            hvac_unit_id=hvac_unit.id,
+            role="serves",
+            allocation_weight=1.0,
+        )
+        db.add(link)
+        db.commit()
+        print(f"🔗 Linked HVAC unit id={hvac_unit.id} to zone '{zone.name}'")
+    return link
+
+
+def seed_zone_schedule(db, zone, start, ZoneSchedule, ZoneScheduleInterval):
+    """
+    Creates three schedules for the zone:
+      1. Weekday Comfort   — Mon-Fri, three intervals (work / evening setback / night off)
+      2. Weekend Setback   — Sat-Sun, full-day off/low setpoint
+      3. User Override     — manual override on seeded day 2, 10:00-14:00 (setpoint 23 °C)
+    All are idempotent — skipped if the schedule name already exists for this zone.
+    """
+    # ------------------------------------------------------------------ #
+    # 1. Weekday Comfort schedule                                          #
+    # ------------------------------------------------------------------ #
+    weekday_sched = db.query(ZoneSchedule).filter_by(
+        zone_id=zone.id, name="Weekday Comfort"
+    ).first()
+    if not weekday_sched:
+        weekday_sched = ZoneSchedule(
+            zone_id=zone.id,
+            schedule_type="comfort",
+            name="Weekday Comfort",
+        )
+        db.add(weekday_sched)
+        db.commit()
+        db.refresh(weekday_sched)
+
+        intervals = []
+        for day in range(1, 6):  # 1=Monday … 5=Friday
+            intervals += [
+                # Occupied work hours
+                ZoneScheduleInterval(
+                    schedule_id=weekday_sched.id,
+                    day_of_week=day,
+                    start_time=datetime.time(8, 0),
+                    end_time=datetime.time(18, 0),
+                    target_setpoint_c=21.5,
+                    min_setpoint_c=20.0,
+                    max_setpoint_c=24.0,
+                    expected_occupancy=10,
+                    hvac_mode="auto",
+                ),
+                # Evening setback
+                ZoneScheduleInterval(
+                    schedule_id=weekday_sched.id,
+                    day_of_week=day,
+                    start_time=datetime.time(18, 0),
+                    end_time=datetime.time(23, 0),
+                    target_setpoint_c=18.0,
+                    min_setpoint_c=16.0,
+                    max_setpoint_c=26.0,
+                    expected_occupancy=0,
+                    hvac_mode="auto",
+                ),
+                # Night off
+                ZoneScheduleInterval(
+                    schedule_id=weekday_sched.id,
+                    day_of_week=day,
+                    start_time=datetime.time(0, 0),
+                    end_time=datetime.time(8, 0),
+                    target_setpoint_c=16.0,
+                    min_setpoint_c=14.0,
+                    max_setpoint_c=28.0,
+                    expected_occupancy=0,
+                    hvac_mode="off",
+                ),
+            ]
+        db.bulk_save_objects(intervals)
+        db.commit()
+        print(f"📅 Created Weekday Comfort schedule for zone '{zone.name}'")
+
+    # ------------------------------------------------------------------ #
+    # 2. Weekend Setback schedule                                          #
+    # ------------------------------------------------------------------ #
+    weekend_sched = db.query(ZoneSchedule).filter_by(
+        zone_id=zone.id, name="Weekend Setback"
+    ).first()
+    if not weekend_sched:
+        weekend_sched = ZoneSchedule(
+            zone_id=zone.id,
+            schedule_type="comfort",
+            name="Weekend Setback",
+        )
+        db.add(weekend_sched)
+        db.commit()
+        db.refresh(weekend_sched)
+
+        weekend_intervals = []
+        for day in (6, 7):  # 6=Saturday, 7=Sunday
+            weekend_intervals.append(
+                ZoneScheduleInterval(
+                    schedule_id=weekend_sched.id,
+                    day_of_week=day,
+                    start_time=datetime.time(0, 0),
+                    end_time=datetime.time(23, 59),
+                    target_setpoint_c=16.0,
+                    min_setpoint_c=14.0,
+                    max_setpoint_c=28.0,
+                    expected_occupancy=0,
+                    hvac_mode="off",
+                )
+            )
+        db.bulk_save_objects(weekend_intervals)
+        db.commit()
+        print(f"📅 Created Weekend Setback schedule for zone '{zone.name}'")
+
+    # ------------------------------------------------------------------ #
+    # 3. Simulated user manual override — day 2, 10:00-14:00              #
+    # User felt too warm and raised setpoint to 23 °C                     #
+    # ------------------------------------------------------------------ #
+    override_sched = db.query(ZoneSchedule).filter_by(
+        zone_id=zone.id, name="User Override Day 2"
+    ).first()
+    if not override_sched:
+        override_day = start + datetime.timedelta(days=1)
+        override_sched = ZoneSchedule(
+            zone_id=zone.id,
+            schedule_type="manual_override",
+            name="User Override Day 2",
+            valid_from=override_day.replace(hour=10, minute=0, second=0, microsecond=0),
+            valid_to=override_day.replace(hour=14, minute=0, second=0, microsecond=0),
+        )
+        db.add(override_sched)
+        db.commit()
+        db.refresh(override_sched)
+
+        db.add(ZoneScheduleInterval(
+            schedule_id=override_sched.id,
+            day_of_week=None,   # override applies regardless of day-of-week
+            start_time=datetime.time(10, 0),
+            end_time=datetime.time(14, 0),
+            target_setpoint_c=23.0,
+            min_setpoint_c=22.0,
+            max_setpoint_c=25.0,
+            expected_occupancy=5,
+            hvac_mode="cooling",
+        ))
+        db.commit()
+        print(f"📅 Created User Override schedule for zone '{zone.name}'")
+
+
+def seed_zone_states(db, zone, hvac_unit, start, end, ZoneState):
+    """
+    Seeds zone_states for every 5-min bucket in [start, end).
+    Simulates:
+      - Measured temperature  (same formula as sensor seeding)
+      - Active setpoint       (follows weekday / weekend / user-override logic)
+      - Humidity (40-65 %)
+      - CO2 ppm (400 base, rises when occupied)
+      - Occupancy flag
+      - HVAC status + controller output %
+    Deletes existing rows in the window before re-seeding.
+    """
+    db.query(ZoneState).filter(
+        ZoneState.zone_id == zone.id,
+        ZoneState.ts >= start,
+        ZoneState.ts < end,
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    unit_phase     = (zone.building_id % 5) * 0.4 + (hvac_unit.id % 7) * 0.45
+    unit_base_temp = 22.2 + 0.4 * (hvac_unit.id % 3)
+    time_steps = []
+    ts = start
+    while ts < end:
+        time_steps.append(ts)
+        ts += datetime.timedelta(minutes=5)
+
+    state_rows = []
+    for i, t in enumerate(time_steps):
+        # Normalise to naive UTC (consistent with rest of mock data)
+        t_plain = t.replace(tzinfo=None) if t.tzinfo else t
+
+        hour_fraction = t_plain.hour + (t_plain.minute / 60.0)
+        day_of_week = t_plain.weekday()      # 0=Mon … 6=Sun
+        is_weekday = day_of_week < 5
+        work_hours = 8 <= hour_fraction < 18
+        midday_setback = 13 <= hour_fraction < 14.5
+        is_on = is_weekday and work_hours and not midday_setback
+
+        day_offset = (t_plain.date() - start.date()).days
+        user_override = (day_offset == 1 and 10 <= hour_fraction < 14)
+
+        # Active setpoint — mirrors schedule definitions above
+        if user_override:
+            setpoint = 23.0
+        elif is_on:
+            setpoint = 21.5
+        elif is_weekday and work_hours:
+            setpoint = 18.0     # evening setback
+        else:
+            setpoint = 16.0     # night / weekend
+
+        # Temperature simulation
+        daily_wave = math.sin((2 * math.pi * i) / 288.0 + unit_phase)
+        short_wave  = math.sin((2 * math.pi * i) / 36.0  + unit_phase * 1.7)
+        measured_temp = unit_base_temp + 0.9 * daily_wave + 0.25 * short_wave - (0.35 if is_on else 0.0)
+        if user_override:
+            measured_temp += 1.2   # room warmer during override
+        measured_temp = round(max(20.5, min(25.2, measured_temp)), 2)
+
+        delta_t = round(measured_temp - setpoint, 2)
+
+        # Humidity 40-65 %
+        humidity = 45.0 + 10.0 * math.sin((2 * math.pi * i) / 288.0 + 1.2)
+        if is_on:
+            humidity += 5.0
+        humidity = round(max(35.0, min(65.0, humidity)), 1)
+
+        # CO2 — base 420 ppm, +280 when occupied
+        occupancy_wave = math.sin((2 * math.pi * (hour_fraction - 8)) / 10.0)
+        occupied = is_on and occupancy_wave > -0.15
+        if 12 <= hour_fraction < 13:
+            occupied = occupied and (i % 4 != 0)
+        co2 = 420.0 + (280.0 if occupied else 0.0) + 40.0 * short_wave
+        co2 = round(max(400.0, min(1200.0, co2)), 0)
+
+        # HVAC status + controller output
+        if not is_on and not user_override:
+            hvac_status = "off"
+            ctrl_output = 0.0
+        elif delta_t > 0.5:
+            hvac_status = "cooling"
+            ctrl_output = round(min(100.0, delta_t * 25.0), 1)
+        elif delta_t < -0.5:
+            hvac_status = "heating"
+            ctrl_output = round(min(100.0, abs(delta_t) * 25.0), 1)
+        else:
+            hvac_status = "idle"
+            ctrl_output = 0.0
+
+        state_rows.append(ZoneState(
+            zone_id=zone.id,
+            ts=t,
+            measured_temp_c=measured_temp,
+            setpoint_c=round(setpoint, 1),
+            delta_t_c=delta_t,
+            humidity_pct=humidity,
+            co2_ppm=co2,
+            occupancy=1 if occupied else 0,
+            hvac_unit_id=hvac_unit.id,
+            controller_output_pct=ctrl_output,
+            hvac_status=hvac_status,
+        ))
+
+    db.bulk_save_objects(state_rows)
+    db.commit()
+    print(f"🌡️  Seeded {len(state_rows)} zone state rows for zone '{zone.name}'")
+    return len(state_rows)
+
+
+def seed_building_timeseries(db, building, hvac_unit, sensors, user_id, start, end, WeatherData, SensorData):
     time_steps = []
     ts = start
     while ts < end:
@@ -521,25 +927,16 @@ def seed_building_timeseries(db, building, hvac_unit, sensors, user_id, start, e
     db.query(SensorData).filter(
         and_(
             SensorData.sensor_id.in_([sensor.id for sensor in sensors.values()]),
-            SensorData.timestamp >= start,
-            SensorData.timestamp < end,
-        )
-    ).delete(synchronize_session=False)
-
-    db.query(HVACScheduleInterval).filter(
-        and_(
-            HVACScheduleInterval.building_id == building.id,
-            HVACScheduleInterval.hvac_unit_id == hvac_unit.id,
-            HVACScheduleInterval.start_ts >= start,
-            HVACScheduleInterval.start_ts < end,
+            SensorData.ts >= start,
+            SensorData.ts < end,
         )
     ).delete(synchronize_session=False)
 
     db.commit()
 
-    schedule_rows = []
     sensor_rows = []
-    building_phase = (building.id % 5) * 0.4
+    unit_phase    = (building.id % 5) * 0.4 + (hvac_unit.id % 7) * 0.45
+    unit_base_temp = 22.2 + 0.4 * (hvac_unit.id % 3)   # 22.2 / 22.6 / 23.0 per unit
 
     for i, t in enumerate(time_steps):
         if t.tzinfo is not None:
@@ -549,14 +946,13 @@ def seed_building_timeseries(db, building, hvac_unit, sensors, user_id, start, e
         work_hours = 8 <= hour_fraction <= 18
         midday_setback = 13 <= hour_fraction < 14.5
         is_on = work_hours and not midday_setback
-        setpoint = 21.0 if is_on else None
 
-        daily_wave = math.sin((2 * math.pi * i) / 288.0 + building_phase)
-        short_wave = math.sin((2 * math.pi * i) / 36.0 + (building_phase * 1.7))
+        daily_wave = math.sin((2 * math.pi * i) / 288.0 + unit_phase)
+        short_wave = math.sin((2 * math.pi * i) / 36.0 + (unit_phase * 1.7))
         occupancy_wave = math.sin((2 * math.pi * (hour_fraction - 8)) / 10.0)
 
-        indoor_temp = 22.2 + (0.9 * daily_wave) + (0.25 * short_wave) - (0.35 if is_on else 0.0)
-        indoor_temp = max(20.5, min(24.4, indoor_temp))
+        indoor_temp = unit_base_temp + (0.9 * daily_wave) + (0.25 * short_wave) - (0.35 if is_on else 0.0)
+        indoor_temp = max(20.5, min(24.8, indoor_temp))
 
         occupied = work_hours and occupancy_wave > -0.15
         if 12 <= hour_fraction < 13:
@@ -567,80 +963,80 @@ def seed_building_timeseries(db, building, hvac_unit, sensors, user_id, start, e
         modulation = 0.04 * max(short_wave, -0.5)
         energy_kwh = max(0.05, round(base_energy + hvac_energy + modulation, 3))
 
-        schedule_rows.append(
-            HVACScheduleInterval(
+        temp_sensor = sensors.get("temperature") or sensors.get("thermostat")
+        if temp_sensor:
+            sensor_rows.append(SensorData(
+                sensor_id=temp_sensor.id,
                 building_id=building.id,
-                hvac_unit_id=hvac_unit.id,
-                start_ts=t,
-                end_ts=t + datetime.timedelta(minutes=5),
-                is_on=is_on,
-                setpoint=setpoint,
-                created_by_user_id=user_id,
-            )
-        )
+                ts=t,
+                value=round(indoor_temp, 2),
+                quality="valid",
+            ))
+        if "presence" in sensors:
+            sensor_rows.append(SensorData(
+                sensor_id=sensors["presence"].id,
+                building_id=building.id,
+                ts=t,
+                value=1.0 if occupied else 0.0,
+                quality="valid",
+            ))
+        if "energy" in sensors:
+            sensor_rows.append(SensorData(
+                sensor_id=sensors["energy"].id,
+                building_id=building.id,
+                ts=t,
+                value=energy_kwh,
+                quality="valid",
+            ))
 
-        sensor_rows.extend(
-            [
-                SensorData(
-                    sensor_id=sensors["temperature"].id,
-                    timestamp=t,
-                    value=round(indoor_temp, 2),
-                    measurement_type="temperature",
-                    unit="celsius",
-                ),
-                SensorData(
-                    sensor_id=sensors["presence"].id,
-                    timestamp=t,
-                    value=1.0 if occupied else 0.0,
-                    measurement_type="presence",
-                    unit="bool",
-                ),
-                SensorData(
-                    sensor_id=sensors["energy"].id,
-                    timestamp=t,
-                    value=energy_kwh,
-                    measurement_type="energy",
-                    unit="kWh",
-                ),
-            ]
-        )
-
-    db.bulk_save_objects(schedule_rows)
     db.bulk_save_objects(sensor_rows)
     db.commit()
 
-    return len(time_steps), 0, len(schedule_rows), len(sensor_rows)
+    return len(time_steps), 0, 0, len(sensor_rows)
 
 
 def insert_mock_data():
     db = SessionLocal()
     try:
-        from models.hvac_models import Building, User, UserBuilding, HVACScheduleInterval
+        from models.hvac_models import Building, User, UserBuilding
         from models.hvac_unit import HVACUnit
         from models.sensor import Sensor
+        from models.sensor_unit import SensorUnit
         from models.sensordata import WeatherData, SensorData
         from models.service import Service
+        from models.topology import HVACZone, ZoneHVACUnit, Room, ZoneRoom
+        from models.thermostat import Thermostat, ZoneThermostat
+        from models.zone_schedule import ZoneSchedule, ZoneScheduleInterval
+        from models.zone_state import ZoneState
 
         print("🔄 Checking and initializing mock data...")
 
+        # Seed canonical unit registry first — sensors depend on it
+        seed_sensor_units(db, SensorUnit)
+
         get_or_create_mock_services(db, Service)
 
-        days = 3
         now_utc = datetime.datetime.utcnow()
-        start = utc_naive(datetime.datetime(now_utc.year, now_utc.month, now_utc.day, 0, 0, 0))
-        end = start + datetime.timedelta(days=days)
+        today_midnight = utc_naive(datetime.datetime(now_utc.year, now_utc.month, now_utc.day, 0, 0, 0))
+        start = today_midnight - datetime.timedelta(days=2)   # 2 days of history
+        end   = today_midnight + datetime.timedelta(days=2)   # 2 days ahead for forecast
 
-        total_steps = total_weather = total_schedules = total_sensor_rows = 0
+        total_steps = total_weather = total_schedules = total_sensor_rows = total_zone_state_rows = 0
         primary_building = None
         primary_user = None
+        seeded_buildings = set()   # track which building IDs already had zones/states seeded
 
         for config in TESTER_CONFIGS:
             building = get_or_create_building(db, config, Building)
             user = get_or_create_user(db, config, User)
             ensure_user_building_mapping(db, user, building, config["role"], UserBuilding)
 
+            building_primary_unit = None   # first hvac_unit created/found for this building
             for device_config in iter_config_devices(config):
                 hvac_unit = get_or_create_hvac_unit(db, building, device_config, HVACUnit)
+                if building_primary_unit is None:
+                    building_primary_unit = hvac_unit
+
                 sensors = {}
                 for sensor_config in device_config["sensors"]:
                     sensor_type = sensor_config["type"]
@@ -653,6 +1049,7 @@ def insert_mock_data():
                         sensor_config["unit"],
                         Sensor,
                         payload_path=sensor_config.get("payload_path"),
+                        label=sensor_config.get("label"),
                     )
 
                 if device_config.get("seed_timeseries", False):
@@ -667,12 +1064,112 @@ def insert_mock_data():
                         end,
                         WeatherData,
                         SensorData,
-                        HVACScheduleInterval,
                     )
                     total_steps += steps
                     total_weather += weather_count
                     total_schedules += schedule_count
                     total_sensor_rows += sensor_count
+
+            # Zone + schedules + zone states — seeded once per unique building.
+            # Tester1 and Tester4 share Pilot1, so we guard with seeded_buildings.
+            if building.id not in seeded_buildings:
+                if config["building_name"] == "Pilot1":
+                    # Pilot1: 3 split units, one per office zone — each is its own device
+                    pilot_topology = [
+                        {
+                            "split": "Split Office 1", "zone": "Zone Office 1",
+                            "room": "Office 1", "thermostat": "Thermostat Office 1",
+                            "thermostat_bms_id": "split_office_1",
+                            "is_controllable": True,
+                            "sensors": [
+                                {
+                                    "type": "temperature", "unit": "°C",
+                                    "payload_path": "temperature.tC",
+                                    "is_controllable": True,
+                                    "command_payload_template": '{"setpoint": {value}}',
+                                },
+                                {"type": "energy",   "unit": "Wh",   "payload_path": "aenergy.total"},
+                                {"type": "presence", "unit": "bool", "payload_path": "output"},
+                            ],
+                        },
+                        {
+                            "split": "Split Office 2", "zone": "Zone Office 2",
+                            "room": "Office 2", "thermostat": "Thermostat Office 2",
+                            "thermostat_bms_id": "split_office_2",
+                            "is_controllable": True,
+                            "sensors": [
+                                {
+                                    "type": "temperature", "unit": "°C",
+                                    "payload_path": "temperature.tC",
+                                    "is_controllable": True,
+                                    "command_payload_template": '{"setpoint": {value}, "mode": "auto"}',
+                                },
+                                {"type": "energy",  "unit": "Wh", "payload_path": "aenergy.total"},
+                                {"type": "power",   "unit": "W",  "payload_path": "apower"},
+                                {"type": "voltage", "unit": "V",  "payload_path": "voltage"},
+                            ],
+                        },
+                        {
+                            "split": "Split Office 3", "zone": "Zone Office 3",
+                            "room": "Office 3", "thermostat": "Thermostat Office 3",
+                            "thermostat_bms_id": "split_office_3",
+                            "is_controllable": False,
+                            "sensors": [
+                                {"type": "temperature", "unit": "°C", "payload_path": "temperature.tC"},
+                                {"type": "energy",      "unit": "Wh", "payload_path": "aenergy.total"},
+                                {"type": "power",       "unit": "W",  "payload_path": "apower"},
+                                {"type": "voltage",     "unit": "V",  "payload_path": "voltage"},
+                            ],
+                        },
+                    ]
+                    for topo in pilot_topology:
+                        split_unit = get_or_create_hvac_unit(
+                            db, building,
+                            {"central_unit": topo["split"], "unit_type": "split"},
+                            HVACUnit,
+                        )
+
+                        # Zone must exist before sensors so zone_id can be assigned
+                        zone = get_or_create_zone(db, building, topo["zone"], HVACZone)
+                        get_or_create_zone_hvac_link(db, zone, split_unit, ZoneHVACUnit)
+
+                        split_sensors = {}
+                        for s_cfg in topo["sensors"]:
+                            split_sensors[s_cfg["type"]] = get_or_create_sensor(
+                                db, building, split_unit, {}, s_cfg["type"], s_cfg["unit"], Sensor,
+                                payload_path=s_cfg.get("payload_path"),
+                                zone_id=zone.id,
+                                is_controllable=s_cfg.get("is_controllable", False),
+                                command_payload_template=s_cfg.get("command_payload_template"),
+                            )
+
+                        steps, wc, sc, src = seed_building_timeseries(
+                            db, building, split_unit, split_sensors, user.id, start, end, WeatherData, SensorData
+                        )
+                        total_steps += steps
+                        total_weather += wc
+                        total_sensor_rows += src
+
+                        room = get_or_create_room(db, building, topo["room"], Room)
+                        get_or_create_zone_room_link(db, zone, room, ZoneRoom)
+                        thermostat = get_or_create_thermostat(
+                            db, building, topo["thermostat"], Thermostat,
+                            is_controllable=topo.get("is_controllable", False),
+                            external_bms_id=topo.get("thermostat_bms_id"),
+                        )
+                        get_or_create_zone_thermostat_link(db, zone, thermostat, ZoneThermostat)
+                        seed_zone_schedule(db, zone, start, ZoneSchedule, ZoneScheduleInterval)
+                        total_zone_state_rows += seed_zone_states(
+                            db, zone, split_unit, start, end, ZoneState
+                        )
+                else:
+                    zone = get_or_create_zone(db, building, "Main Zone", HVACZone)
+                    get_or_create_zone_hvac_link(db, zone, building_primary_unit, ZoneHVACUnit)
+                    seed_zone_schedule(db, zone, start, ZoneSchedule, ZoneScheduleInterval)
+                    total_zone_state_rows += seed_zone_states(
+                        db, zone, building_primary_unit, start, end, ZoneState
+                    )
+                seeded_buildings.add(building.id)
 
             if config["building_name"] == "Pilot1":
                 primary_building = building
@@ -696,7 +1193,8 @@ def insert_mock_data():
         print(
             f"✅ Inserted mock data: {total_steps} timesteps, "
             f"{total_weather} weather rows, {total_schedules} schedule rows, "
-            f"{total_sensor_rows} sensor rows across {len(TESTER_CONFIGS)} tester scenarios"
+            f"{total_sensor_rows} sensor rows, {total_zone_state_rows} zone state rows "
+            f"across {len(TESTER_CONFIGS)} tester scenarios"
         )
 
     except Exception as e:

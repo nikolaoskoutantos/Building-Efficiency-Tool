@@ -16,6 +16,9 @@ import DocsComponents from '@/components/DocsComponents'
 import DocsExample from '@/components/DocsExample'
 import DocsIcons from '@/components/DocsIcons'
 
+const runtimeOrigin = globalThis.location?.origin || 'https://benet.nkoutantos.com'
+const runtimeMetadataUrl = import.meta.env.VITE_APPKIT_METADATA_URL || runtimeOrigin
+
 // ✅ Reown AppKit Setup
 createAppKit({
   adapters: [new Ethers5Adapter()],
@@ -24,10 +27,10 @@ createAppKit({
   metadata: {
     name: 'Auth',
     description: 'AppKit Example',
-    url: 'https://benet.nkoutantos.com',
+    url: runtimeMetadataUrl,
     icons: ['https://assets.reown.com/reown-profile-pic.png'],
     redirect: {
-      universal: 'https://benet.nkoutantos.com'
+      universal: runtimeMetadataUrl
     }
   },
   features: { analytics: true },
@@ -52,5 +55,10 @@ import { useAuthStore } from './stores/auth'
 // Top-level await for app initialization
 const authStore = useAuthStore(pinia)
 globalThis.$authStore = authStore
+authStore.registerJwtExpiryHandler(async () => {
+  if (router.currentRoute.value.path !== '/login') {
+    await router.replace('/login')
+  }
+})
 await authStore.initializeAuth()
 app.mount('#app')

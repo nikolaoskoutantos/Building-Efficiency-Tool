@@ -9,7 +9,6 @@ class Predictor(Base):
     name = Column(String, nullable=False)
     framework = Column(String, nullable=False)
     scores = Column(JSON, nullable=True)
-    knowledge_id = Column(Integer, ForeignKey("knowledge.id"), nullable=False)
     # Location-based fields
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)

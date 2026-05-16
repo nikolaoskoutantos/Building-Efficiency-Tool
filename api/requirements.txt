@@ -19,6 +19,8 @@ apscheduler
 bcrypt
 mlflow
 paho-mqtt
+jsonpath-ng
+pyyaml
 aiohttp
 asyncpg
 alembic

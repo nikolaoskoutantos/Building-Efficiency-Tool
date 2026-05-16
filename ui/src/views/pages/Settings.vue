@@ -112,12 +112,13 @@
                         v-for="building in buildings" 
                         :key="building.id" 
                         :value="building.id"
+                        :disabled="building.status === 'pending'"
                       >
-                        {{ building.name }}{{ building.address ? ` - ${building.address}` : '' }}{{ (building.lat && building.lon) ? ` (${building.lat}, ${building.lon})` : '' }}
+                        {{ formatBuildingOptionLabel(building) }}
                       </option>
                     </CFormSelect>
                     <div class="form-text">
-                      This building will be pre-selected when creating new devices and sensors. If not set, the first building (by ID) will be used automatically.
+                      Active buildings can be selected as default. Pending buildings are visible for tracking but cannot be used until approved.
                     </div>
                   </div>
 
@@ -134,7 +135,7 @@
                     <CButton
                       color="outline-primary"
                       size="sm"
-                      @click="showBuildingModal = true"
+                      @click="openBuildingPanel"
                     >
                       <CIcon name="cilPlus" class="me-1" />
                       Add Building
@@ -268,17 +269,24 @@
       </CCol>
     </CRow>
 
-    <!-- Building Management Modal -->
-    <CModal
+    <!-- Building Management Offcanvas -->
+    <COffcanvas
       :visible="showBuildingModal"
-      alignment="center"
-      size="lg"
+      placement="end"
       @close="closeBuildingModal"
+      class="settings-building-panel"
+      :style="buildingPanelStyle"
     >
-      <CModalHeader @close-click="closeBuildingModal">
-        <CModalTitle>{{ buildingForm.editing ? 'Edit Building' : 'Add New Building' }}</CModalTitle>
-      </CModalHeader>
-      <CModalBody>
+      <div
+        class="settings-building-resize-handle"
+        @mousedown.prevent="startBuildingPanelResize"
+        @touchstart.prevent="startBuildingPanelResize"
+      />
+      <COffcanvasHeader class="border-bottom">
+        <COffcanvasTitle>{{ buildingForm.editing ? 'Edit Building' : 'Add New Building' }}</COffcanvasTitle>
+        <CButton class="btn-close" @click="closeBuildingModal" aria-label="Close" />
+      </COffcanvasHeader>
+      <COffcanvasBody>
         <form @submit.prevent="saveBuilding">
           <div class="mb-3">
             <CFormLabel for="building-name">Building Name *</CFormLabel>
@@ -300,6 +308,33 @@
               placeholder="Optional building address"
               :disabled="buildingForm.loading"
             />
+          </div>
+
+          <div class="mb-3">
+            <CFormLabel for="building-address-search">Find Address on Map</CFormLabel>
+            <CInputGroup class="mb-1">
+              <CFormInput
+                id="building-address-search"
+                v-model="buildingAddressSearch"
+                placeholder="Search address, city, or place"
+                :disabled="buildingForm.loading || buildingMap.searching"
+                @keyup.enter="searchBuildingAddress"
+              />
+              <CButton
+                type="button"
+                color="info"
+                variant="outline"
+                :disabled="buildingForm.loading || buildingMap.searching"
+                @click="searchBuildingAddress"
+              >
+                {{ buildingMap.searching ? 'Searching...' : 'Search' }}
+              </CButton>
+            </CInputGroup>
+            <div class="form-text">Search an address or click and drag the map pin to populate coordinates.</div>
+          </div>
+
+          <div class="mb-3">
+            <div ref="buildingMapContainer" class="settings-building-map"></div>
           </div>
 
           <CRow>
@@ -333,8 +368,8 @@
             </CCol>
           </CRow>
         </form>
-      </CModalBody>
-      <CModalFooter>
+      </COffcanvasBody>
+      <div class="offcanvas-footer settings-building-panel__footer">
         <CButton
           color="secondary"
           @click="closeBuildingModal"
@@ -352,8 +387,8 @@
           <CIcon v-if="!buildingForm.loading" :name="buildingForm.editing ? 'cilPencil' : 'cilPlus'" class="me-1" />
           {{ buildingForm.loading ? 'Saving...' : (buildingForm.editing ? 'Update' : 'Add Building') }}
         </CButton>
-      </CModalFooter>
-    </CModal>
+      </div>
+    </COffcanvas>
   </CContainer>
 </template>
 
@@ -390,6 +425,17 @@ export default {
         api_base_url: ''
       },
       showBuildingModal: false,
+      buildingAddressSearch: '',
+      buildingMap: {
+        ready: false,
+        loading: false,
+        searching: false,
+        map: null,
+        marker: null,
+        defaultCenter: { lat: 37.9838, lon: 23.7275 }
+      },
+      buildingPanelWidth: 640,
+      isResizingBuildingPanel: false,
       buildingForm: {
         editing: false,
         id: null,
@@ -410,6 +456,13 @@ export default {
     isWalletConnected() {
       const authStore = useAuthStore()
       return authStore.isAuthenticated && authStore.walletAddress
+    },
+
+    buildingPanelStyle() {
+      return {
+        '--cui-offcanvas-width': `${this.buildingPanelWidth}px`,
+        width: `${this.buildingPanelWidth}px`,
+      }
     }
   },
 
@@ -428,6 +481,10 @@ export default {
 
   mounted() {
     this.initializeSettings()
+  },
+
+  beforeUnmount() {
+    this.stopBuildingPanelResize()
   },
 
   methods: {
@@ -585,10 +642,10 @@ export default {
     async loadBuildings() {
       this.loading = true
       try {
-        console.log('Loading buildings from:', `${this.apiBaseUrl}/buildings`)
+        console.log('Loading buildings from:', `${this.apiBaseUrl}/buildings?include_pending=true`)
         const authStore = useAuthStore()
         const jwtToken = authStore.getJwtToken ? authStore.getJwtToken() : localStorage.getItem('jwtToken')
-        const response = await fetch(`${this.apiBaseUrl}/buildings/`, {
+        const response = await fetch(`${this.apiBaseUrl}/buildings/?include_pending=true`, {
           headers: {
             'Authorization': jwtToken ? `Bearer ${jwtToken}` : '',
             'Content-Type': 'application/json'
@@ -603,11 +660,18 @@ export default {
           
           // Sort buildings by ID to ensure consistent ordering
           this.buildings.sort((a, b) => a.id - b.id)
-          
-          // Auto-select the first building (minimum ID) if no default is set
-          if (this.buildings.length > 0 && !this.settings.default_building_id) {
-            this.settings.default_building_id = this.buildings[0].id
-            this.showAlert('info', `Default building set to: ${this.buildings[0].name}`)
+
+          const activeBuildings = this.buildings.filter(building => building.status !== 'pending')
+
+          // Auto-select the first active building (minimum ID) if no default is set
+          if (activeBuildings.length > 0 && !this.settings.default_building_id) {
+            this.settings.default_building_id = activeBuildings[0].id
+            this.showAlert('info', `Default building set to: ${activeBuildings[0].name}`)
+          } else if (
+            this.settings.default_building_id &&
+            !activeBuildings.some(building => building.id === this.settings.default_building_id)
+          ) {
+            this.settings.default_building_id = ''
           }
         } else {
           console.warn('Failed to load buildings:', response.status, response.statusText)
@@ -808,8 +872,58 @@ export default {
       this.showAlert('success', `Wallet address set as public identifier! Make sure to save your settings.`)
     },
 
+    openBuildingPanel() {
+      this.showBuildingModal = true
+      this.$nextTick(() => {
+        this.loadBuildingMapAssets()
+      })
+    },
+
+    clampBuildingPanelWidth(width) {
+      const viewportWidth = globalThis.innerWidth || 1280
+      const maxWidth = Math.max(480, Math.min(980, viewportWidth - 24))
+      return Math.min(Math.max(width, 480), maxWidth)
+    },
+
+    startBuildingPanelResize(event) {
+      this.isResizingBuildingPanel = true
+      this.updateBuildingPanelWidthFromEvent(event)
+      globalThis.addEventListener('mousemove', this.handleBuildingPanelResize)
+      globalThis.addEventListener('mouseup', this.stopBuildingPanelResize)
+      globalThis.addEventListener('touchmove', this.handleBuildingPanelResize, { passive: false })
+      globalThis.addEventListener('touchend', this.stopBuildingPanelResize)
+    },
+
+    handleBuildingPanelResize(event) {
+      if (!this.isResizingBuildingPanel) return
+      if (event.cancelable) event.preventDefault()
+      this.updateBuildingPanelWidthFromEvent(event)
+    },
+
+    updateBuildingPanelWidthFromEvent(event) {
+      const point = event.touches?.[0] || event
+      if (!point || typeof point.clientX !== 'number') return
+      const nextWidth = (globalThis.innerWidth || 0) - point.clientX
+      this.buildingPanelWidth = this.clampBuildingPanelWidth(nextWidth)
+      this.$nextTick(() => {
+        if (this.buildingMap.map) {
+          this.buildingMap.map.invalidateSize()
+        }
+      })
+    },
+
+    stopBuildingPanelResize() {
+      this.isResizingBuildingPanel = false
+      globalThis.removeEventListener('mousemove', this.handleBuildingPanelResize)
+      globalThis.removeEventListener('mouseup', this.stopBuildingPanelResize)
+      globalThis.removeEventListener('touchmove', this.handleBuildingPanelResize)
+      globalThis.removeEventListener('touchend', this.stopBuildingPanelResize)
+    },
+
     closeBuildingModal() {
+      this.stopBuildingPanelResize()
       this.showBuildingModal = false
+      this.buildingAddressSearch = ''
       this.buildingForm = {
         editing: false,
         id: null,
@@ -818,6 +932,168 @@ export default {
         lat: '',
         lon: '',
         loading: false
+      }
+    },
+
+    setBuildingCoordinates(lat, lon) {
+      this.buildingForm.lat = Number(lat).toFixed(6)
+      this.buildingForm.lon = Number(lon).toFixed(6)
+    },
+
+    updateBuildingMarker(lat, lon, zoom = 15) {
+      if (!this.buildingMap.ready || !this.buildingMap.map || !window.L) {
+        return
+      }
+
+      const point = [Number(lat), Number(lon)]
+      if (!this.buildingMap.marker) {
+        this.buildingMap.marker = window.L.marker(point, { draggable: true }).addTo(this.buildingMap.map)
+        this.buildingMap.marker.on('dragend', async (event) => {
+          const markerPoint = event.target.getLatLng()
+          await this.handleBuildingMapSelection(markerPoint.lat, markerPoint.lng)
+        })
+      } else {
+        this.buildingMap.marker.setLatLng(point)
+      }
+
+      this.buildingMap.map.setView(point, zoom)
+    },
+
+    async reverseGeocodeBuilding(lat, lon) {
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=en&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
+          { headers: { Accept: 'application/json' } },
+        )
+        if (!response.ok) {
+          return
+        }
+
+        const payload = await response.json()
+        if (payload?.display_name) {
+          this.buildingForm.address = payload.display_name
+          this.buildingAddressSearch = payload.display_name
+        }
+      } catch (error) {
+        console.warn('Reverse geocoding failed:', error)
+      }
+    },
+
+    async handleBuildingMapSelection(lat, lon) {
+      this.setBuildingCoordinates(lat, lon)
+      this.updateBuildingMarker(lat, lon)
+      await this.reverseGeocodeBuilding(lat, lon)
+    },
+
+    async searchBuildingAddress() {
+      const query = (this.buildingAddressSearch || this.buildingForm.address || '').trim()
+      if (!query) {
+        this.showAlert('warning', 'Enter an address or place to search.')
+        return
+      }
+
+      this.buildingMap.searching = true
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=jsonv2&accept-language=en&limit=1&q=${encodeURIComponent(query)}`,
+          { headers: { Accept: 'application/json' } },
+        )
+        if (!response.ok) {
+          throw new Error('Address search failed')
+        }
+
+        const results = await response.json()
+        if (!Array.isArray(results) || results.length === 0) {
+          throw new Error('No matching address found')
+        }
+
+        const first = results[0]
+        this.buildingForm.address = first.display_name || query
+        this.buildingAddressSearch = first.display_name || query
+        this.setBuildingCoordinates(first.lat, first.lon)
+        this.updateBuildingMarker(first.lat, first.lon)
+      } catch (error) {
+        this.showAlert('warning', error.message || 'Address search failed')
+      } finally {
+        this.buildingMap.searching = false
+      }
+    },
+
+    initBuildingMap() {
+      if (!window.L || !this.$refs.buildingMapContainer) {
+        return
+      }
+
+      if (!this.buildingMap.map) {
+        this.buildingMap.map = window.L.map(this.$refs.buildingMapContainer, {
+          zoomControl: true,
+        }).setView([this.buildingMap.defaultCenter.lat, this.buildingMap.defaultCenter.lon], 6)
+
+        window.L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        }).addTo(this.buildingMap.map)
+
+        this.buildingMap.map.on('click', async (event) => {
+          await this.handleBuildingMapSelection(event.latlng.lat, event.latlng.lng)
+        })
+      } else {
+        this.buildingMap.map.invalidateSize()
+      }
+
+      this.buildingMap.ready = true
+      if (this.buildingForm.lat && this.buildingForm.lon) {
+        this.updateBuildingMarker(this.buildingForm.lat, this.buildingForm.lon)
+      } else {
+        this.updateBuildingMarker(this.buildingMap.defaultCenter.lat, this.buildingMap.defaultCenter.lon, 6)
+      }
+    },
+
+    async loadBuildingMapAssets() {
+      if (this.buildingMap.loading) {
+        return
+      }
+
+      if (window.L) {
+        this.initBuildingMap()
+        return
+      }
+
+      this.buildingMap.loading = true
+      try {
+        const existingCss = document.querySelector('link[data-settings-leaflet="true"]')
+        if (!existingCss) {
+          const css = document.createElement('link')
+          css.rel = 'stylesheet'
+          css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+          css.dataset.settingsLeaflet = 'true'
+          document.head.appendChild(css)
+        }
+
+        await new Promise((resolve, reject) => {
+          const existingScript = document.querySelector('script[data-settings-leaflet="true"]')
+          if (existingScript) {
+            existingScript.addEventListener('load', resolve, { once: true })
+            existingScript.addEventListener('error', reject, { once: true })
+            return
+          }
+
+          const script = document.createElement('script')
+          script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+          script.async = true
+          script.defer = true
+          script.dataset.settingsLeaflet = 'true'
+          script.onload = resolve
+          script.onerror = reject
+          document.head.appendChild(script)
+        })
+
+        this.initBuildingMap()
+      } catch (error) {
+        console.warn('Failed to load building map assets:', error)
+        this.showAlert('warning', 'Map failed to load. You can still enter coordinates manually.')
+      } finally {
+        this.buildingMap.loading = false
       }
     },
 
@@ -879,6 +1155,13 @@ export default {
       }
     },
 
+    formatBuildingOptionLabel(building) {
+      const statusTag = building.status === 'pending' ? ' [Pending]' : ''
+      const addressPart = building.address ? ` - ${building.address}` : ''
+      const coordinatesPart = (building.lat && building.lon) ? ` (${building.lat}, ${building.lon})` : ''
+      return `${building.name}${statusTag}${addressPart}${coordinatesPart}`
+    },
+
     getBuildingApiUrl() {
       return this.buildingForm.editing 
         ? `${this.apiBaseUrl}/buildings/${this.buildingForm.id}`
@@ -914,8 +1197,13 @@ export default {
 
     async handleBuildingSaveResponse(response) {
       if (response.ok) {
-        const action = this.buildingForm.editing ? 'updated' : 'added'
-        this.showAlert('success', `Building ${action} successfully!`)
+        const isEditing = this.buildingForm.editing
+        this.showAlert(
+          'success',
+          isEditing
+            ? 'Building updated successfully!'
+            : 'Building submitted successfully. Access will remain pending until approval.'
+        )
         this.loadBuildings()
         this.closeBuildingModal()
       } else {
@@ -956,6 +1244,98 @@ export default {
     radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 28%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 1) 100%);
   border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.settings-building-panel {
+  position: relative;
+  width: min(var(--cui-offcanvas-width, 640px), calc(100vw - 12px));
+  min-width: 480px;
+  max-width: calc(100vw - 12px);
+  border-left: 1px solid rgba(37, 99, 235, 0.12);
+  border-top-left-radius: 24px;
+  border-bottom-left-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.10), transparent 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(248, 250, 252, 0.98) 100%);
+  box-shadow:
+    -28px 0 60px rgba(15, 23, 42, 0.16),
+    -10px 0 24px rgba(59, 130, 246, 0.08),
+    -2px 0 0 rgba(255, 255, 255, 0.55);
+  overflow: hidden;
+}
+
+.settings-building-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 3;
+}
+
+.settings-building-resize-handle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 64px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.24);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.settings-building-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-top-left-radius: 24px;
+  border-bottom-left-radius: 24px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+.settings-building-panel :deep(.offcanvas-header) {
+  padding: 1.15rem 1.25rem 1rem 1.5rem;
+  border-bottom: 1px solid rgba(19, 34, 56, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.72));
+  backdrop-filter: blur(10px);
+}
+
+.settings-building-panel :deep(.offcanvas-body) {
+  padding: 1.25rem 1.25rem 1rem 1.5rem;
+}
+
+.settings-building-panel__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1rem 1.25rem;
+  border-top: 1px solid rgba(19, 34, 56, 0.08);
+}
+
+.settings-building-map {
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid #d7dce3;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: #eef3f8;
+}
+
+@media (max-width: 576px) {
+  .settings-building-panel {
+    width: 100vw;
+    min-width: 100vw;
+    max-width: 100vw;
+    border-radius: 0;
+  }
+
+  .settings-building-resize-handle {
+    display: none;
+  }
 }
 
 .settings-shell :deep(.card-body) {

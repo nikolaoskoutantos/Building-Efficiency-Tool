@@ -28,10 +28,10 @@
         >
           {{ buttonLabel }}
         </CButton>
-        <CButton color="secondary" class="w-100" @click="logout">Register</CButton>
+        <CButton color="secondary" class="w-100" @click="goToRegister">Register</CButton>
 
         <p class="text-center mt-4 text-muted">
-          Don’t have a wallet? <a href="https://metamask.io/" target="_blank">Get MetaMask</a>
+          Don't have a wallet? <a href="https://metamask.io/" target="_blank">Get MetaMask</a>
         </p>
       </CContainer>
     </div>
@@ -288,6 +288,10 @@ async function logout() {
   }
 
   await router.push('/')
+}
+
+async function goToRegister() {
+  await router.push('/register')
 }
 </script>
 

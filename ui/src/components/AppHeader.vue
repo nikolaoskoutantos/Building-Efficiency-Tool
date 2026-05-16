@@ -1,13 +1,14 @@
 // ...existing code...
 <script setup>
 import Leaderboard from '@/components/Leaderboard.vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useColorModes } from '@coreui/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useRouter } from 'vue-router'
 import { useSidebarStore } from '@/stores/sidebar.js'
 import { useAlertsStore } from '@/stores/alerts.js'
 import { useThemeStore } from '@/stores/theme.js'
+import { useDashboardStore } from '@/stores/dashboard.js'
 import Alerts from '@/components/Alerts.vue'
 
 import AppBreadcrumb from '@/components/AppBreadcrumb.vue'
@@ -24,14 +25,33 @@ function changeColorMode(mode) {
 }
 const auth = useAuthStore()
 const alertsStore = useAlertsStore()
+const dashboardStore = useDashboardStore()
 const router = useRouter()
 const showAlerts = ref(false)
+
+const buildings = computed(() => dashboardStore.buildings)
+const activeBuilding = computed(() => dashboardStore.activeBuilding)
+
+function selectBuilding(buildingId) {
+  dashboardStore.setSelectedBuilding(buildingId)
+}
 const bellAnimating = ref(false)
+const nowMs = ref(Date.now())
+let tokenCountdownInterval = null
 const alertsBadge = computed(() => {
   const count = alertsStore.alerts.length
   if (count <= 0) return ''
   return count > 9 ? '9+' : String(count)
 })
+const tokenRemainingMs = computed(() => auth.getJwtRemainingMs(nowMs.value))
+const showTokenCountdown = computed(() => {
+  if (!auth.getJwtToken()) {
+    return false
+  }
+
+  return tokenRemainingMs.value !== null && tokenRemainingMs.value <= 5 * 60 * 1000
+})
+const tokenCountdownLabel = computed(() => formatRemainingTime(tokenRemainingMs.value))
 
 watch(
   () => alertsStore.alerts.length,
@@ -54,6 +74,17 @@ onMounted(() => {
       ? 'mb-4 p-0 shadow-sm'
       : 'mb-4 p-0'
   })
+
+  tokenCountdownInterval = window.setInterval(() => {
+    nowMs.value = Date.now()
+  }, 1000)
+})
+
+onBeforeUnmount(() => {
+  if (tokenCountdownInterval) {
+    window.clearInterval(tokenCountdownInterval)
+    tokenCountdownInterval = null
+  }
 })
 
 const showLeaderboard = ref(false);
@@ -99,6 +130,23 @@ function navigateToSettings(event) {
   router.push('/settings');
 }
 
+function formatRemainingTime(remainingMs) {
+  if (remainingMs === null || remainingMs === undefined) {
+    return ''
+  }
+
+  const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
 
 </script>
 
@@ -111,6 +159,26 @@ function navigateToSettings(event) {
       <CHeaderToggler class="app-header-shell__toggler" @click="sidebar.toggleVisible()" style="margin-inline-start: -14px">
         <CIcon icon="cil-menu" size="lg" />
       </CHeaderToggler>
+      <!-- Building selector — always a dropdown -->
+      <CDropdown v-if="activeBuilding" variant="nav-item" class="app-header-shell__building-selector me-2">
+        <CDropdownToggle class="d-flex align-items-center gap-2" :caret="buildings.length > 1">
+          <CIcon icon="cil-building" size="sm" />
+          <span class="app-header-shell__building-label">{{ activeBuilding.name }}</span>
+        </CDropdownToggle>
+        <CDropdownMenu v-if="buildings.length > 1">
+          <CDropdownItem
+            v-for="building in buildings"
+            :key="building.id"
+            :active="building.id === activeBuilding.id"
+            component="button"
+            type="button"
+            @click="selectBuilding(building.id)"
+          >
+            {{ building.name }}
+          </CDropdownItem>
+        </CDropdownMenu>
+      </CDropdown>
+
       <CHeaderNav class="d-none d-md-flex app-header-shell__nav">
         <CNavItem>
           <CNavLink href="/dashboard"> Dashboard </CNavLink>
@@ -120,6 +188,11 @@ function navigateToSettings(event) {
         </CNavItem>
       </CHeaderNav>
       <CHeaderNav class="ms-auto app-header-shell__actions">
+        <CNavItem v-if="showTokenCountdown" class="d-none d-lg-flex align-items-center">
+          <div class="app-header-shell__token-warning" title="JWT access token expiration countdown">
+            Session expires in {{ tokenCountdownLabel }}
+          </div>
+        </CNavItem>
         <CNavItem>
           <CNavLink
             href="#"
@@ -252,6 +325,22 @@ function navigateToSettings(event) {
   transform-origin: top center;
 }
 
+.app-header-shell__token-warning {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  margin-right: 0.65rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid rgba(211, 98, 29, 0.22);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 245, 231, 0.98), rgba(255, 236, 213, 0.96));
+  color: #9a3412;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 24px rgba(201, 88, 20, 0.12);
+}
+
 .app-header-shell__alert-link--animated {
   animation: app-header-bell-ring 0.72s ease;
 }
@@ -280,6 +369,16 @@ function navigateToSettings(event) {
   font-weight: 700;
   box-shadow: 0 10px 22px rgba(220, 53, 69, 0.16);
 }
+
+.app-header-shell__building-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 .app-header-shell :deep(.dropdown-menu) {
   border: 1px solid rgba(172, 199, 255, 0.3);
@@ -335,6 +434,13 @@ function navigateToSettings(event) {
 .app-header-shell--dark .app-header-shell__alert-badge {
   color: #e2e8f0;
   text-shadow: 0 1px 0 rgba(15, 23, 42, 0.55);
+}
+
+.app-header-shell--dark .app-header-shell__token-warning {
+  border-color: rgba(251, 146, 60, 0.28);
+  background: linear-gradient(180deg, rgba(85, 43, 18, 0.95), rgba(106, 52, 18, 0.92));
+  color: #fed7aa;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.26);
 }
 
 .app-header-shell--dark .app-header-shell__logout {

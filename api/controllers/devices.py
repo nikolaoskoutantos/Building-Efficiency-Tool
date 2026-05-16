@@ -1,5 +1,5 @@
 USER_NOT_FOUND_DESC = "User not found."
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, Header, status
 from utils.auth_dependencies import get_current_user_role, resolve_registered_user_id
 from utils.policies import has_permission
 from typing import Annotated, Optional, List
@@ -11,9 +11,14 @@ from sqlalchemy import func
 from models.hvac_unit import HVACUnit
 from models.sensor import Sensor
 from models.hvac_models import Building
+from models.device_token import DeviceToken
+from models.device_command import DeviceCommand
+from models.topology import HVACZone, ZoneHVACUnit
+from models.thermostat import Thermostat, ZoneThermostat
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db import SessionLocal
+from utils.unit_resolver import canonicalize_unit
 
 router = APIRouter(prefix="/devices", tags=["Device Management"])
 
@@ -35,28 +40,226 @@ def get_db():
 
 DbSession = Annotated[Session, Depends(get_db)]
 
+
+# Defined here (before helper functions) so _create_device_zones can reference it at runtime
+class ZoneRegistrationRequest(BaseModel):
+    name: str
+    zone_type: Optional[str] = None  # e.g. 'residential', 'office', 'industrial'
+
+
+def _sensor_create_payload(
+    building_id: int,
+    hvac_unit_id: int,
+    sensor_req: "SensorRegistrationRequest",
+    db: Session,
+    zone_name_to_id: Optional[dict] = None,
+    room_name_to_id: Optional[dict] = None,
+) -> dict:
+    canonical_unit, unit_id = canonicalize_unit(sensor_req.unit, db)
+    zone_id = sensor_req.zone_id
+    if zone_id is None and sensor_req.zone_name and zone_name_to_id:
+        zone_id = zone_name_to_id.get(sensor_req.zone_name)
+    room_id = sensor_req.room_id
+    if room_id is None and sensor_req.room_name and room_name_to_id:
+        room_id = room_name_to_id.get(sensor_req.room_name)
+    return {
+        "building_id": building_id,
+        "hvac_unit_id": hvac_unit_id,
+        "name": sensor_req.name,
+        "sensor_type": sensor_req.sensor_type,
+        "unit": canonical_unit,
+        "unit_id": unit_id,
+        "room_id": room_id,
+        "zone_id": zone_id,
+        "thermostat_id": sensor_req.thermostat_id,
+        "external_sensor_id": sensor_req.external_sensor_id,
+        "payload_path": sensor_req.payload_path,
+        "is_controllable": sensor_req.is_controllable,
+        "command_payload_template": sensor_req.command_payload_template,
+    }
+
+
+def _build_sensor_for_device(
+    building_id: int,
+    hvac_unit_id: int,
+    sensor_req: "SensorRegistrationRequest",
+    db: Session,
+    zone_name_to_id: Optional[dict] = None,
+    room_name_to_id: Optional[dict] = None,
+) -> Sensor:
+    return Sensor(**_sensor_create_payload(building_id, hvac_unit_id, sensor_req, db, zone_name_to_id, room_name_to_id))
+
+
+def _set_hvac_unit_fields(hvac_unit: HVACUnit, req: "DeviceRegistrationRequest") -> None:
+    hvac_unit.building_id = req.building_id
+    if req.name:
+        hvac_unit.name = req.name
+    if req.unit_type:
+        hvac_unit.unit_type = req.unit_type
+
+
+def _rotate_hvac_unit_credentials(hvac_unit: HVACUnit) -> str:
+    """Rotate credentials on the existing HVACUnit row only.
+
+    This helper never creates or replaces an HVACUnit. It mutates the current
+    row in-place so related foreign keys keep pointing at the same id.
+    """
+    device_secret = secrets.token_urlsafe(48)
+    device_secret_hash = bcrypt.hashpw(device_secret.encode(), bcrypt.gensalt()).decode()
+    now = datetime.now(timezone.utc).isoformat()
+
+    if not hvac_unit.device_key:
+        hvac_unit.device_key = str(uuid.uuid4())
+
+    hvac_unit.device_secret_hash = device_secret_hash
+    hvac_unit.device_secret_rotated_at = now
+    hvac_unit.device_revoked_at = None
+    return device_secret
+
+
+def _sync_thermostat_for_sensor(db: Session, sensor: Sensor, building_id: int) -> None:
+    """For controllable sensors (or thermostat type), ensure a Thermostat row exists, link the
+    sensor to it, and link the thermostat to the sensor's zone so the topology zone label works."""
+    if sensor.sensor_type == "thermostat":
+        sensor.is_controllable = True
+    if not sensor.is_controllable:
+        return
+    thermostat = db.query(Thermostat).filter(
+        Thermostat.building_id == building_id,
+        Thermostat.name == sensor.name,
+    ).first()
+    if not thermostat:
+        thermostat = Thermostat(building_id=building_id, name=sensor.name, is_controllable=True)
+        db.add(thermostat)
+        db.flush()
+    else:
+        thermostat.is_controllable = True
+    sensor.thermostat_id = thermostat.id
+
+    # Link thermostat → zone so the topology SQL (zone_primary_thermostat CTE) can
+    # resolve the thermostat name and make the zone show as controllable.
+    if sensor.zone_id:
+        existing_link = db.query(ZoneThermostat).filter(
+            ZoneThermostat.zone_id == sensor.zone_id,
+            ZoneThermostat.thermostat_id == thermostat.id,
+        ).first()
+        if not existing_link:
+            db.add(ZoneThermostat(zone_id=sensor.zone_id, thermostat_id=thermostat.id, role="primary"))
+
+
+def _upsert_device_sensors(
+    db: Session,
+    sensors: Optional[List["SensorRegistrationRequest"]],
+    building_id: int,
+    hvac_unit_id: int,
+) -> None:
+    """Update existing sensors in-place (preserving IDs) and add new ones.
+
+    Matching is done by sensor name within the device.  Sensors no longer
+    present in the request are left untouched so that historical data is
+    never orphaned.
+    """
+    if not sensors:
+        return
+
+    existing_by_name: dict = {
+        s.name: s
+        for s in db.query(Sensor).filter(Sensor.hvac_unit_id == hvac_unit_id).all()
+    }
+
+    for sensor_req in sensors:
+        if sensor_req.name in existing_by_name:
+            # In-place update — ID is preserved
+            s = existing_by_name[sensor_req.name]
+            canonical_unit, unit_id = canonicalize_unit(sensor_req.unit, db)
+            s.sensor_type = sensor_req.sensor_type
+            s.unit = canonical_unit
+            s.unit_id = unit_id
+            s.room_id = sensor_req.room_id
+            # Only overwrite zone_id when explicitly provided — never clear an existing zone assignment
+            if sensor_req.zone_id is not None:
+                s.zone_id = sensor_req.zone_id
+            s.thermostat_id = sensor_req.thermostat_id
+            s.external_sensor_id = sensor_req.external_sensor_id
+            s.payload_path = sensor_req.payload_path
+            s.is_controllable = sensor_req.is_controllable
+            s.command_payload_template = sensor_req.command_payload_template
+            s.building_id = building_id
+            s.hvac_unit_id = hvac_unit_id
+            _sync_thermostat_for_sensor(db, s, building_id)
+            print(f"{UPDATE_DEVICE_LOG_PREFIX} Updated sensor id={s.id} name={s.name}")
+        else:
+            # New sensor
+            new_sensor = _build_sensor_for_device(building_id, hvac_unit_id, sensor_req, db)
+            db.add(new_sensor)
+            db.flush()
+            # Safety net: if no zone was supplied, assign to the device's first linked zone
+            # so the sensor always appears in the topology.
+            if not new_sensor.zone_id:
+                default_zone = (
+                    db.query(HVACZone)
+                    .join(ZoneHVACUnit, ZoneHVACUnit.zone_id == HVACZone.id)
+                    .filter(ZoneHVACUnit.hvac_unit_id == hvac_unit_id)
+                    .first()
+                )
+                if default_zone:
+                    new_sensor.zone_id = default_zone.id
+            _sync_thermostat_for_sensor(db, new_sensor, building_id)
+            print(f"{UPDATE_DEVICE_LOG_PREFIX} Added new sensor name={sensor_req.name}")
+
+def _create_device_zones(
+    db: Session,
+    building_id: int,
+    hvac_unit: HVACUnit,
+    zone_requests: Optional[List[ZoneRegistrationRequest]],
+) -> dict[str, int]:
+    """Create zones for the device and link them via zone_hvac_units.
+
+    Returns a mapping of zone_name → zone_id so sensors can be assigned
+    to their zone during the same registration call.
+    If no zones are requested, one default zone is created automatically.
+    """
+    requests = zone_requests or [ZoneRegistrationRequest(name=f"{hvac_unit.name} Zone")]
+    zone_name_to_id: dict[str, int] = {}
+
+    for zone_req in requests:
+        zone = HVACZone(
+            building_id=building_id,
+            name=zone_req.name,
+            zone_type=zone_req.zone_type,
+        )
+        db.add(zone)
+        db.flush()  # populate zone.id before linking
+
+        link = ZoneHVACUnit(zone_id=zone.id, hvac_unit_id=hvac_unit.id)
+        db.add(link)
+        zone_name_to_id[zone_req.name] = zone.id
+
+    return zone_name_to_id
+
+
 # --- Response Models ---
 class DeviceListResponse(BaseModel):
     id: int
     building_id: int
     building_name: str
-    central_unit: Optional[str] = None
-    zone: Optional[str] = None
-    room: Optional[str] = None
-    device_key: str  # Required again since we filter out None values
-    sensor_count: int = 0  # Real sensor count
+    name: str
+    unit_type: str
+    device_key: str
+    sensor_count: int = 0
     created_at: Optional[str] = None
 
 class SensorResponse(BaseModel):
     id: int
-    type: Optional[str] = None
-    lat: float
-    lon: float
-    rate_of_sampling: float
-    unit: str
-    room: Optional[str] = None
-    zone: Optional[str] = None
-    central_unit: Optional[str] = None
+    name: str
+    sensor_type: str
+    unit: Optional[str] = None
+    room_id: Optional[int] = None
+    zone_id: Optional[int] = None
+    thermostat_id: Optional[int] = None
+    payload_path: Optional[str] = None
+    is_controllable: bool = False
+    command_payload_template: Optional[str] = None
 
 class SensorAddResponse(BaseModel):
     message: str
@@ -64,31 +267,39 @@ class SensorAddResponse(BaseModel):
 
 # --- Request Models ---
 class SensorRegistrationRequest(BaseModel):
-    type: Optional[str] = None
-    lat: float
-    lon: float
-    rate_of_sampling: Optional[float] = 5.0  # Default 5 seconds
-    unit: str
-    room: Optional[str] = None
-    zone: Optional[str] = None
-    central_unit: Optional[str] = None
-    description: Optional[str] = None
+    name: str
+    sensor_type: str
+    unit: Optional[str] = None
+    room_id: Optional[int] = None
+    room_name: Optional[str] = None  # resolved to room_id after rooms are created in same transaction
+    zone_id: Optional[int] = None
+    zone_name: Optional[str] = None
+    thermostat_id: Optional[int] = None
+    external_sensor_id: Optional[str] = None
+    payload_path: Optional[str] = None
+    is_controllable: bool = False
+    command_payload_template: Optional[str] = None
+
+class RoomRegistrationRequest(BaseModel):
+    name: str
+    zone_name: Optional[str] = None  # links to a zone being created in this request
+
 
 class DeviceRegistrationRequest(BaseModel):
     building_id: int
-    central_unit: Optional[str] = None
-    zone: Optional[str] = None
-    room: Optional[str] = None
+    name: str
+    unit_type: str
     sensors: Optional[List[SensorRegistrationRequest]] = None
+    zones: Optional[List[ZoneRegistrationRequest]] = None  # None = auto-create one zone
+    rooms: Optional[List[RoomRegistrationRequest]] = None
 
 class DeviceCredentialResponse(BaseModel):
     device_key: str
     device_secret: str
 
 class DeviceCredentialUpsertRequest(BaseModel):
-    central_unit: Optional[str] = None
-    zone: Optional[str] = None
-    room: Optional[str] = None
+    name: Optional[str] = None
+    unit_type: Optional[str] = None
     sensors: Optional[List[SensorRegistrationRequest]] = None
 
 class SensorBulkAddRequest(BaseModel):
@@ -146,12 +357,11 @@ def list_devices(
                 id=device.id,
                 building_id=device.building_id,
                 building_name=building_name or "Unknown Building",
-                central_unit=device.central_unit,
-                zone=device.zone,
-                room=device.room,
+                name=device.name,
+                unit_type=device.unit_type,
                 device_key=device_key,
                 sensor_count=int(sensor_count),
-                created_at=None
+                created_at=device.created_at.isoformat() if device.created_at else None
             ))
         
         return result
@@ -190,14 +400,15 @@ def get_device_sensors(
         return [
             SensorResponse(
                 id=sensor.id,
-                type=sensor.type,
-                lat=sensor.lat,
-                lon=sensor.lon,
-                rate_of_sampling=sensor.rate_of_sampling,
+                name=sensor.name,
+                sensor_type=sensor.sensor_type,
                 unit=sensor.unit,
-                room=sensor.room,
-                zone=sensor.zone,
-                central_unit=sensor.central_unit
+                room_id=sensor.room_id,
+                zone_id=sensor.zone_id,
+                thermostat_id=sensor.thermostat_id,
+                payload_path=sensor.payload_path,
+                is_controllable=sensor.is_controllable,
+                command_payload_template=sensor.command_payload_template,
             )
             for sensor in sensors
         ]
@@ -234,21 +445,12 @@ def add_sensors_to_device(
     for s in req.sensors:
         if not has_permission(user_id, "building", hvac_unit.building_id, db):
             raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
-        sensor = Sensor(
-            building_id=hvac_unit.building_id,
-            hvac_unit_id=hvac_unit.id,
-            type=s.type,
-            lat=s.lat,
-            lon=s.lon,
-            rate_of_sampling=s.rate_of_sampling,
-            unit=s.unit,
-            room=s.room,
-            zone=s.zone,
-            central_unit=s.central_unit
-        )
+        sensor = _build_sensor_for_device(hvac_unit.building_id, hvac_unit.id, s, db)
         db.add(sensor)
+        db.flush()
+        _sync_thermostat_for_sensor(db, sensor, hvac_unit.building_id)
         sensors_added += 1
-    
+
     db.commit()
     
     return SensorAddResponse(
@@ -282,36 +484,43 @@ def register_device(
 
     hvac_unit = HVACUnit(
         building_id=req.building_id,
-        central_unit=req.central_unit,
-        zone=req.zone,
-        room=req.room,
+        name=req.name,
+        unit_type=req.unit_type,
         device_key=device_key,
         device_secret_hash=device_secret_hash,
         device_secret_rotated_at=now,
         device_revoked_at=None
     )
     db.add(hvac_unit)
-    db.commit()
-    db.refresh(hvac_unit)
+    db.flush()  # get hvac_unit.id before zone creation
+
+    # Always create at least one zone and link it to the unit.
+    # If the user supplied zone definitions, create them; otherwise auto-create one.
+    zone_name_to_id = _create_device_zones(db, req.building_id, hvac_unit, req.zones)
+
+    room_name_to_id: dict = {}
+    if req.rooms:
+        from models.topology import Room, ZoneRoom
+        for room_req in req.rooms:
+            room = Room(building_id=req.building_id, name=room_req.name.strip())
+            db.add(room)
+            db.flush()
+            room_name_to_id[room_req.name.strip()] = room.id
+            if room_req.zone_name:
+                zone_id = zone_name_to_id.get(room_req.zone_name)
+                if zone_id:
+                    db.add(ZoneRoom(zone_id=zone_id, room_id=room.id))
 
     if req.sensors:
         for s in req.sensors:
             if not has_permission(user_id, "building", req.building_id, db):
                 raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
-            sensor = Sensor(
-                building_id=req.building_id,
-                hvac_unit_id=hvac_unit.id,
-                type=s.type,
-                lat=s.lat,
-                lon=s.lon,
-                rate_of_sampling=s.rate_of_sampling,
-                unit=s.unit,
-                room=s.room,
-                zone=s.zone,
-                central_unit=s.central_unit
-            )
+            sensor = _build_sensor_for_device(req.building_id, hvac_unit.id, s, db, zone_name_to_id, room_name_to_id)
             db.add(sensor)
-        db.commit()
+            db.flush()
+            _sync_thermostat_for_sensor(db, sensor, req.building_id)
+
+    db.commit()
 
     return DeviceCredentialResponse(device_key=device_key, device_secret=device_secret)
 
@@ -335,7 +544,6 @@ def update_device(
     """Update an existing HVAC device and its sensors"""
     try:
         user_id = resolve_registered_user_id(user, db)
-        # Find the existing device
         hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
         if not hvac_unit:
             raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND)
@@ -344,60 +552,11 @@ def update_device(
         if not has_permission(user_id, "building", req.building_id, db):
             raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
 
-        # Update HVAC unit fields
-        hvac_unit.building_id = req.building_id
-        hvac_unit.central_unit = req.central_unit
-        hvac_unit.zone = req.zone
-        hvac_unit.room = req.room
-
-        # Delete existing sensors for this device (handle foreign key constraints)
-        print(f"{UPDATE_DEVICE_LOG_PREFIX} Starting sensor cleanup for device {hvac_unit_id}")
-        existing_sensors = db.query(Sensor).filter(Sensor.hvac_unit_id == hvac_unit_id).all()
-        print(f"{UPDATE_DEVICE_LOG_PREFIX} Found {len(existing_sensors)} sensors to clean up")
-        
-        for sensor in existing_sensors:
-            print(f"{UPDATE_DEVICE_LOG_PREFIX} Cleaning up sensor {sensor.id}")
-            # Delete all sensor data records that reference this sensor from all tables
-            from models.sensordata import SensorData, HVACSensorData, SensorDataRaw
-            
-            sensor_data_count = db.query(SensorData).filter(SensorData.sensor_id == sensor.id).count()
-            hvac_data_count = db.query(HVACSensorData).filter(HVACSensorData.sensor_id == sensor.id).count()
-            raw_data_count = db.query(SensorDataRaw).filter(SensorDataRaw.sensor_id == sensor.id).count()
-            
-            print(f"{UPDATE_DEVICE_LOG_PREFIX} Sensor {sensor.id} has {sensor_data_count} SensorData, {hvac_data_count} HVACSensorData, {raw_data_count} SensorDataRaw records")
-            
-            db.query(SensorData).filter(SensorData.sensor_id == sensor.id).delete(synchronize_session=False)
-            db.query(HVACSensorData).filter(HVACSensorData.sensor_id == sensor.id).delete(synchronize_session=False)
-            db.query(SensorDataRaw).filter(SensorDataRaw.sensor_id == sensor.id).delete(synchronize_session=False)
-            
-        # Flush changes to database before deleting sensors
-        db.flush()
-        print(f"{UPDATE_DEVICE_LOG_PREFIX} All sensor data deleted, now deleting sensors")
-            
-        # Now we can safely delete the sensors
-        db.query(Sensor).filter(Sensor.hvac_unit_id == hvac_unit_id).delete(synchronize_session=False)
-        
-        # Add new sensors if provided
-        if req.sensors:
-            for s in req.sensors:
-                if not has_permission(user_id, "building", req.building_id, db):
-                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DESC)
-                sensor = Sensor(
-                    building_id=req.building_id,
-                    hvac_unit_id=hvac_unit.id,
-                    type=s.type,
-                    lat=s.lat,
-                    lon=s.lon,
-                    rate_of_sampling=s.rate_of_sampling,
-                    unit=s.unit,
-                    room=s.room,
-                    zone=s.zone,
-                    central_unit=s.central_unit
-                )
-                db.add(sensor)
+        _set_hvac_unit_fields(hvac_unit, req)
+        _upsert_device_sensors(db, req.sensors, req.building_id, hvac_unit.id)
 
         db.commit()
-        
+
         return {"message": "Device updated successfully", "device_id": hvac_unit_id}
         
     except HTTPException:
@@ -424,41 +583,328 @@ def upsert_device_credentials(
     req: Optional[DeviceCredentialUpsertRequest] = None,
     user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None,
 ):
+    try:
+        hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
+        if not hvac_unit:
+            raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND_DESC)
+
+        original_hvac_unit_id = hvac_unit.id
+        user_id = resolve_registered_user_id(user, db)
+        if not has_permission(user_id, "device", hvac_unit.id, db):
+            raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
+
+        device_secret = _rotate_hvac_unit_credentials(hvac_unit)
+
+        # Revoke all active tokens for this device — secret rotation = immediate logout
+        db.query(DeviceToken).filter(
+            DeviceToken.hvac_unit_id == hvac_unit.id,
+            DeviceToken.revoked_at.is_(None),
+        ).update({DeviceToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
+
+        if req:
+            if req.name is not None:
+                hvac_unit.name = req.name
+            if req.unit_type is not None:
+                hvac_unit.unit_type = req.unit_type
+            if req.sensors is not None:
+                _upsert_device_sensors(db, req.sensors, hvac_unit.building_id, hvac_unit.id)
+
+        db.flush()
+
+        if hvac_unit.id != original_hvac_unit_id:
+            raise RuntimeError(
+                f"HVAC unit identity changed during credential rotation: "
+                f"{original_hvac_unit_id} -> {hvac_unit.id}"
+            )
+
+        db.commit()
+        db.refresh(hvac_unit)
+        return DeviceCredentialResponse(device_key=hvac_unit.device_key, device_secret=device_secret)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"[upsert_device_credentials] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/{hvac_unit_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": HVAC_UNIT_NOT_FOUND_DESC}, 403: {"description": UNAUTHORIZED_DESC}},
+)
+def delete_device(
+    hvac_unit_id: int,
+    db: DbSession,
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))],
+):
+    """Delete an HVAC unit and all its sensors."""
+    user_id = resolve_registered_user_id(user, db)
     hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
     if not hvac_unit:
-        raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND_DESC)
-    user_id = resolve_registered_user_id(user, db)
-    if not has_permission(user_id, "device", hvac_unit.id, db):
+        raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND)
+    if not has_permission(user_id, "building", hvac_unit.building_id, db):
         raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
-    device_secret = secrets.token_urlsafe(48)
-    device_secret_hash = bcrypt.hashpw(device_secret.encode(), bcrypt.gensalt()).decode()
-    now = datetime.now(timezone.utc).isoformat()
-    hvac_unit.device_secret_hash = device_secret_hash
-    hvac_unit.device_secret_rotated_at = now
-    hvac_unit.device_revoked_at = None
-    if req:
-        if req.central_unit is not None:
-            hvac_unit.central_unit = req.central_unit
-        if req.zone is not None:
-            hvac_unit.zone = req.zone
-        if req.room is not None:
-            hvac_unit.room = req.room
-        if req.sensors:
-            for s in req.sensors:
-                sensor = Sensor(
-                    building_id=hvac_unit.building_id,
-                    hvac_unit_id=hvac_unit.id,
-                    type=s.type,
-                    lat=s.lat,
-                    lon=s.lon,
-                    rate_of_sampling=s.rate_of_sampling,
-                    unit=s.unit,
-                    room=s.room,
-                    zone=s.zone,
-                    central_unit=s.central_unit
-                )
-                db.add(sensor)
-            db.commit()
+    db.delete(hvac_unit)
     db.commit()
-    db.refresh(hvac_unit)
-    return DeviceCredentialResponse(device_key=hvac_unit.device_key, device_secret=device_secret)
+
+
+@router.delete(
+    "/{hvac_unit_id}/sensors/{sensor_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={404: {"description": "Sensor not found."}, 403: {"description": UNAUTHORIZED_DESC}},
+)
+def delete_sensor(
+    hvac_unit_id: int,
+    sensor_id: int,
+    db: DbSession,
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))],
+):
+    """Delete a single sensor from a device."""
+    user_id = resolve_registered_user_id(user, db)
+    hvac_unit = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
+    if not hvac_unit:
+        raise HTTPException(status_code=404, detail=HVAC_UNIT_NOT_FOUND)
+    if not has_permission(user_id, "building", hvac_unit.building_id, db):
+        raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
+    sensor = db.query(Sensor).filter(Sensor.id == sensor_id, Sensor.hvac_unit_id == hvac_unit_id).first()
+    if not sensor:
+        raise HTTPException(status_code=404, detail="Sensor not found.")
+    db.delete(sensor)
+    db.commit()
+
+
+@router.delete(
+    "/{hvac_unit_id}/tokens/{jti}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        204: {"description": "Token revoked."},
+        404: {"description": "Token not found or already revoked."},
+        403: {"description": UNAUTHORIZED_DESC},
+    },
+    summary="Revoke a specific device token by its jti"
+)
+def revoke_device_token(
+    hvac_unit_id: int,
+    jti: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None,
+):
+    user_id = resolve_registered_user_id(user, db)
+    if not has_permission(user_id, "device", hvac_unit_id, db):
+        raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
+    token_row = db.query(DeviceToken).filter(
+        DeviceToken.jti == jti,
+        DeviceToken.hvac_unit_id == hvac_unit_id,
+        DeviceToken.revoked_at.is_(None),
+    ).first()
+    if not token_row:
+        raise HTTPException(status_code=404, detail="Token not found or already revoked.")
+    token_row.revoked_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Control signal (command) endpoint
+# ---------------------------------------------------------------------------
+
+class DeviceCommandRequest(BaseModel):
+    command_type: str
+    payload: dict
+
+
+class DeviceCommandResponse(BaseModel):
+    command_id: int
+    status: str
+    topic: str
+
+
+@router.post(
+    "/{hvac_unit_id}/command",
+    response_model=DeviceCommandResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        202: {"description": "Command accepted and published to device."},
+        400: {"description": "Broker publish failed."},
+        403: {"description": UNAUTHORIZED_DESC},
+        404: {"description": DEVICE_NOT_FOUND_DESC},
+    },
+    summary="Send a control signal (command) to a device over MQTT",
+)
+def send_device_command(
+    hvac_unit_id: int,
+    body: DeviceCommandRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[dict, Depends(get_current_user_role(["BUILDING_MANAGER", "ADMIN"]))] = None,
+):
+    from services.mqtt_publisher import get_publisher
+
+    user_id = resolve_registered_user_id(user, db)
+    if not has_permission(user_id, "device", hvac_unit_id, db):
+        raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
+
+    device = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail=DEVICE_NOT_FOUND)
+
+    topic = f"building/{device.building_id}/device/{device.device_key}/cmd"
+    mqtt_payload = {
+        "command_type": body.command_type,
+        **body.payload,
+    }
+
+    cmd = DeviceCommand(
+        hvac_unit_id=hvac_unit_id,
+        building_id=device.building_id,
+        command_type=body.command_type,
+        payload=mqtt_payload,
+        status="pending",
+        topic=topic,
+        issued_by_user_id=user_id,
+    )
+    db.add(cmd)
+    db.flush()  # get cmd.id before publish
+
+    published = get_publisher().publish(topic, mqtt_payload)
+    cmd.status = "published" if published else "failed"
+    db.commit()
+
+    if not published:
+        raise HTTPException(status_code=400, detail="MQTT broker publish failed.")
+
+    return DeviceCommandResponse(
+        command_id=cmd.id,
+        status=cmd.status,
+        topic=topic,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Device-side command polling  (REST — for edge / industrial without MQTT)
+# Auth: device JWT  (same token issued by POST /device/auth)
+# ---------------------------------------------------------------------------
+
+class PendingCommandResponse(BaseModel):
+    command_id: int
+    command_type: str
+    payload: dict
+    issued_at: str
+    topic: str
+
+
+class CommandAckRequest(BaseModel):
+    status: str = "acked"   # "acked" | "failed"
+
+
+def _get_device_jwt(authorization: Annotated[str, Header()]) -> dict:
+    """Validate device Bearer JWT and return its payload.
+    Replicates the logic from sensordata.get_device_identity so that devices
+    can use the same token for both data upload and command polling.
+    """
+    import jwt as _jwt
+    import hashlib as _hashlib
+    JWT_SECRET = os.environ.get("SESSION_SECRET_KEY")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization[7:]
+    try:
+        payload = _jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired device token") from exc
+    if payload.get("typ") != "device":
+        raise HTTPException(status_code=403, detail="Not a device token")
+    return payload
+
+
+def _resolve_device_from_jwt(
+    device_jwt: Annotated[dict, Depends(_get_device_jwt)],
+    db: Annotated[Session, Depends(get_db)],
+) -> HVACUnit:
+    """Look up the HVACUnit for the authenticated device JWT."""
+    hvac_unit_id = int(device_jwt["sub"])
+    device = db.query(HVACUnit).filter(HVACUnit.id == hvac_unit_id).first()
+    if not device or device.device_revoked_at:
+        raise HTTPException(status_code=403, detail="Device revoked or not found")
+    return device
+
+
+@router.get(
+    "/me/commands/pending",
+    response_model=List[PendingCommandResponse],
+    responses={
+        200: {"description": "Unacknowledged commands queued for this device."},
+        401: {"description": "Missing or invalid device token."},
+        403: {"description": "Device revoked or not found."},
+    },
+    summary="Poll pending commands (device JWT required)",
+)
+def get_pending_commands(
+    db: Annotated[Session, Depends(get_db)],
+    device: Annotated[HVACUnit, Depends(_resolve_device_from_jwt)],
+):
+    """
+    Edge / industrial devices that cannot use MQTT call this endpoint to poll
+    for commands that have been published but not yet acknowledged.
+    Returns all commands with status 'published' (sent but no ACK received).
+    """
+    cmds = (
+        db.query(DeviceCommand)
+        .filter(
+            DeviceCommand.hvac_unit_id == device.id,
+            DeviceCommand.status == "published",
+            DeviceCommand.acked_at.is_(None),
+        )
+        .order_by(DeviceCommand.issued_at.asc())
+        .all()
+    )
+    return [
+        PendingCommandResponse(
+            command_id=c.id,
+            command_type=c.command_type,
+            payload=c.payload,
+            issued_at=c.issued_at.isoformat(),
+            topic=c.topic,
+        )
+        for c in cmds
+    ]
+
+
+@router.post(
+    "/me/commands/{command_id}/ack",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Command acknowledged."},
+        401: {"description": "Missing or invalid device token."},
+        403: {"description": "Device revoked, not found, or command does not belong to device."},
+        404: {"description": "Command not found."},
+    },
+    summary="Acknowledge a command (device JWT required)",
+)
+def ack_command(
+    command_id: int,
+    body: CommandAckRequest,
+    db: Annotated[Session, Depends(get_db)],
+    device: Annotated[HVACUnit, Depends(_resolve_device_from_jwt)],
+):
+    """
+    Device calls this after executing (or failing to execute) a command received
+    via GET /devices/me/commands/pending.  Sets acked_at and updates status.
+    """
+    cmd = (
+        db.query(DeviceCommand)
+        .filter(
+            DeviceCommand.id == command_id,
+            DeviceCommand.hvac_unit_id == device.id,
+        )
+        .first()
+    )
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Command not found")
+    if cmd.hvac_unit_id != device.id:
+        raise HTTPException(status_code=403, detail=UNAUTHORIZED_DESC)
+
+    cmd.acked_at = datetime.now(timezone.utc)
+    cmd.status = body.status if body.status in ("acked", "failed") else "acked"
+    db.commit()
+    return {"command_id": cmd.id, "status": cmd.status, "acked_at": cmd.acked_at.isoformat()}

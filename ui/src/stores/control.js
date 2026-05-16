@@ -1,4 +1,6 @@
 import { defineStore } from 'pinia'
+import { buildApiUrl } from '@/config/api.js'
+import { useAuthStore } from '@/stores/auth.js'
 
 function isValidTimeLabel(value) {
   return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
@@ -29,6 +31,8 @@ function mapRowsToTimeline(rows) {
       end: row.end,
       enabled: row.enabled !== false,
       setpoint: row?.enabled === false ? null : (row?.setpoint ?? null),
+      start_ts: row?.start_ts ?? null,
+      end_ts: row?.end_ts ?? null,
     }))
 
   const timelineRows = []
@@ -65,7 +69,7 @@ function mergeScheduleRows(rows) {
   const mergedRows = []
   for (const row of timelineRows) {
     const candidate = { ...row }
-    const previous = mergedRows[mergedRows.length - 1]
+    const previous = mergedRows.at(-1)
 
     // If a later row overlaps an earlier one, clip or drop it so the UI
     // always renders the minimum non-overlapping set of periods.
@@ -77,10 +81,9 @@ function mergeScheduleRows(rows) {
     }
 
     if (
-      previous &&
-      previous.enabled === candidate.enabled &&
-      (previous.enabled === false || previous.setpoint === candidate.setpoint) &&
-      candidate.startMinutes <= previous.endMinutes
+      previous?.enabled === candidate.enabled &&
+      (previous?.enabled === false || previous?.setpoint === candidate.setpoint) &&
+      candidate.startMinutes <= (previous?.endMinutes ?? -1)
     ) {
       previous.endMinutes = Math.max(previous.endMinutes, candidate.endMinutes)
       continue
@@ -94,6 +97,8 @@ function mergeScheduleRows(rows) {
     end: minutesToTimeLabel(row.endMinutes),
     enabled: row.enabled,
     setpoint: row.enabled === false ? null : (row.setpoint ?? null),
+    start_ts: row.start_ts ?? null,
+    end_ts: row.end_ts ?? null,
   }))
 }
 
@@ -104,56 +109,104 @@ function normalizeRawScheduleRows(rows) {
     end: minutesToTimeLabel(row.endMinutes),
     enabled: row.enabled,
     setpoint: row.enabled === false ? null : (row.setpoint ?? null),
+    start_ts: row.start_ts ?? null,
+    end_ts: row.end_ts ?? null,
   }))
-}
-
-function expandScheduleRows(rows, stepMinutes = 5) {
-  const timelineRows = mapRowsToTimeline(rows)
-  const expandedRows = []
-
-  for (const row of timelineRows) {
-    for (let cursor = row.startMinutes; cursor < row.endMinutes; cursor += stepMinutes) {
-      const nextCursor = Math.min(cursor + stepMinutes, row.endMinutes)
-      expandedRows.push({
-        id: `${cursor}-${nextCursor}-${row.enabled ? 1 : 0}`,
-        start: minutesToTimeLabel(cursor),
-        end: minutesToTimeLabel(nextCursor),
-        enabled: row.enabled,
-        setpoint: row.enabled === false ? null : (row.setpoint ?? null),
-      })
-    }
-  }
-
-  return expandedRows
 }
 
 export const useControlStore = defineStore('control', {
   state: () => ({
-    // ...other state...
     rawSchedule: [],
     scheduleLoaded: false,
     preferences: {
       switchValue: false,
-      slider1: 50,
+      slider1: 21,
       slider2: 50,
     },
+    zoneSetpoints: {},   // { [zone_id]: number } — persists per-zone setpoint across views
   }),
   getters: {
     schedule: (state) => mergeScheduleRows(state.rawSchedule),
+    editableSchedule: (state) => normalizeRawScheduleRows(state.rawSchedule),
+    getZoneSetpoint: (state) => (zoneId) =>
+      zoneId != null && state.zoneSetpoints[zoneId] != null
+        ? state.zoneSetpoints[zoneId]
+        : state.preferences.slider1,
   },
-    actions: {
+  actions: {
     setRawSchedule(newSchedule) {
       this.rawSchedule = normalizeRawScheduleRows(newSchedule)
       this.scheduleLoaded = true
-      },
+    },
     setSchedule(newSchedule) {
-      this.rawSchedule = expandScheduleRows(newSchedule)
+      this.rawSchedule = normalizeRawScheduleRows(newSchedule)
       this.scheduleLoaded = true
-      },
+    },
+    clearSchedule() {
+      this.rawSchedule = []
+      this.scheduleLoaded = false
+    },
+    clearZoneSetpoints() {
+      this.zoneSetpoints = {}
+    },
     setPreferences(prefs) {
       this.preferences = { ...this.preferences, ...prefs }
     },
-    // ...other actions...
+    /**
+     * Update the setpoint from any view (dashboard or topology) and persist to the schedule DB.
+     * Both the slider value and the schedule rows are kept in sync.
+     */
+    async saveSetpointToSchedule({ buildingId, unitId, zoneId, value }) {
+      // 1. Update per-zone setpoint only — never write preferences.slider1 here.
+      //    The dashboard slider owns preferences.slider1; writing it from here
+      //    causes cross-zone contamination when there are no schedule rows.
+      if (zoneId != null) {
+        this.zoneSetpoints = { ...this.zoneSetpoints, [zoneId]: Number(value) }
+      }
+
+      // 2. Update schedule rows if a schedule is already loaded
+      if (this.scheduleLoaded && this.rawSchedule.length > 0) {
+        const updated = this.editableSchedule.map(row => ({
+          ...row,
+          setpoint: row.enabled ? Number(value) : null,
+        }))
+        this.setRawSchedule(updated)
+      }
+
+      // 3. Persist to DB via the same endpoint the dashboard uses
+      const authStore = useAuthStore()
+      const token = authStore.getJwtToken ? authStore.getJwtToken() : authStore.jwtToken
+      const params = new URLSearchParams()
+      if (unitId) params.set('unit_id', String(unitId))
+      if (zoneId)  params.set('zone_id',  String(zoneId))
+      const query = params.toString() ? `?${params.toString()}` : ''
+
+      // If no schedule rows exist yet, create a default full-day enabled row
+      // so the setpoint is always persisted even before the user configures a schedule.
+      const rows = (this.scheduleLoaded && this.rawSchedule.length > 0)
+        ? this.editableSchedule
+        : [{ start: '00:00', end: '23:59', enabled: true, setpoint: Number(value) }]
+
+      const res = await fetch(buildApiUrl(`/dashboard/hvac-schedule/${buildingId}${query}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          reference_time: new Date().toISOString(),
+          future_hours: 12,
+          rows,
+        }),
+      })
+
+      if (!res.ok) throw new Error(`Failed to save setpoint: ${res.status}`)
+      const payload = await res.json()
+      if (payload.rows) this.setRawSchedule(payload.rows)
+      return payload
+    },
+
     /**
      * Returns a 24-hour array (0-23) with true/false for each hour, based on the current schedule.
      * All hours are off (false) by default. If a schedule row is enabled and covers an hour, that hour is set to true.
@@ -161,7 +214,7 @@ export const useControlStore = defineStore('control', {
      */
     get24HourSchedule() {
       // Start with all hours off
-      const hours = Array(24).fill(false)
+      const hours = new Array(24).fill(false)
       for (const row of this.schedule) {
         if (!row.enabled) continue
         // Parse start and end, round to nearest hour

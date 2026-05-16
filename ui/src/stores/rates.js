@@ -29,7 +29,7 @@ export const useRatesStore = defineStore('rates', () => {
   }
 
   // Submit or update a rating (authenticated endpoint)
-  async function submitRating(serviceId, rating, feedback = null) {
+  async function submitRating(serviceId, rating, feedback = null, ratingType = 'service_quality') {
     loading.value = true
     error.value = null
     
@@ -41,6 +41,7 @@ export const useRatesStore = defineStore('rates', () => {
         body: JSON.stringify({
           service_id: serviceId,
           rating: rating,
+          rating_type: ratingType,
           feedback: feedback
         })
       })
@@ -105,7 +106,7 @@ export const useRatesStore = defineStore('rates', () => {
     }
   }
 
-  // Get service score/ratings (public endpoint)
+  // Get service score/ratings (authenticated endpoint)
   async function fetchServiceScore(serviceId) {
     loading.value = true
     error.value = null
@@ -113,9 +114,8 @@ export const useRatesStore = defineStore('rates', () => {
     try {
       const response = await fetch(buildApiUrl(`/rates/service/${serviceId}/score`), {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders(),
+        credentials: 'include'
       })
 
       if (!response.ok) {

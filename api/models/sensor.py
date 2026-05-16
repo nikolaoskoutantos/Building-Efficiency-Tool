@@ -1,35 +1,54 @@
-from sqlalchemy import Column, Integer, Float, String, ForeignKey
+from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Text, TIMESTAMP, UniqueConstraint
+from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 from db.connection import Base  # make sure this matches your Base import
+
+ONDELETE_CASCADE = "CASCADE"
+ONDELETE_SET_NULL = "SET NULL"
+
 
 class Sensor(Base):
     __tablename__ = "sensors"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(BigInteger, primary_key=True, index=True)
 
     building_id = Column(
-        Integer,
-        ForeignKey("buildings.id", ondelete="CASCADE"),
+        BigInteger,
+        ForeignKey("buildings.id", ondelete=ONDELETE_CASCADE),
         nullable=False
     )
 
-    # NEW: link to HVACUnit (not self-reference)
-    hvac_unit_id = Column(
-        Integer,
-        ForeignKey("hvac_units.id", ondelete="SET NULL"),
+    name = Column(Text, nullable=False)
+    sensor_type = Column(Text, nullable=False)  # temperature, setpoint, humidity, co2, occupancy, hvac_power, hvac_status, etc.
+    unit = Column(Text, nullable=True)  # raw string kept for backward compat; prefer unit_id
+    unit_id = Column(
+        BigInteger,
+        ForeignKey("sensor_units.id", ondelete=ONDELETE_SET_NULL),
         nullable=True,
-        index=True
+        index=True,
     )
+    unit_ref = relationship("SensorUnit", foreign_keys=[unit_id], lazy="select")
 
-    type = Column(String, nullable=True)  # 'temperature', 'presence', etc.
+    # Physical location references (FK replaces old string room/zone/central_unit)
+    room_id = Column(BigInteger, ForeignKey("rooms.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
+    zone_id = Column(BigInteger, ForeignKey("hvac_zones.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
+    thermostat_id = Column(BigInteger, ForeignKey("thermostats.id", ondelete=ONDELETE_SET_NULL), nullable=True)
+    hvac_unit_id = Column(BigInteger, ForeignKey("hvac_units.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
-    lat = Column(Float, nullable=False)
-    lon = Column(Float, nullable=False)
+    # External system identifiers
+    external_sensor_id = Column(Text, nullable=True)
+    external_bms_id = Column(Text, nullable=True)
 
-    rate_of_sampling = Column(Float, nullable=False, default=5.0)
+    # MQTT payload extraction path (kept for IoT device ingestion)
+    payload_path = Column(Text, nullable=True)
 
-    unit = Column(String, nullable=False)
+    # Bidirectional control — sensor can also receive commands
+    is_controllable = Column(Boolean, nullable=False, server_default="false")
+    command_payload_template = Column(Text, nullable=True)
 
-    room = Column(String, nullable=True)
-    zone = Column(String, nullable=True)
-    central_unit = Column(String, nullable=True)
-    payload_path = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("building_id", "name", name="uq_sensors_building_name"),
+        UniqueConstraint("building_id", "external_sensor_id", name="uq_sensors_building_external_id"),
+    )

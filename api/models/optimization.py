@@ -8,6 +8,9 @@ class OptimizationResult(Base):
     id = Column(Integer, primary_key=True, index=True)
     building_id = Column(Integer, ForeignKey("buildings.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    # Zone/unit scoping — NULL means building-level (legacy rows)
+    hvac_unit_id = Column(Integer, ForeignKey("hvac_units.id", ondelete="SET NULL"), nullable=True, index=True)
+    zone_id = Column(Integer, ForeignKey("hvac_zones.id", ondelete="SET NULL"), nullable=True, index=True)
     snapshot_batch_id = Column(
         Integer,
         ForeignKey("optimization_input_snapshot_batches.id"),
@@ -15,6 +18,8 @@ class OptimizationResult(Base):
         index=True,
     )
     optimization_time = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    window_start = Column(DateTime(timezone=True), nullable=True)
+    window_end = Column(DateTime(timezone=True), nullable=True)
     input_hash = Column(String(64), nullable=False, index=True)
     output_hash = Column(String(64), nullable=False, index=True)
     input_data = Column(JSON, nullable=True)

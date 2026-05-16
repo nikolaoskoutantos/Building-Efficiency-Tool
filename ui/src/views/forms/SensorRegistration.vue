@@ -33,7 +33,7 @@
                     :key="device.id" 
                     :value="device.id"
                   >
-                    {{ device.building_name }} - {{ device.location }}
+                    {{ device.building_name }} — {{ device.name }} ({{ device.unit_type }})
                   </option>
                 </CFormSelect>
               </div>
@@ -71,7 +71,7 @@
                     <div class="d-flex justify-content-between align-items-start mb-3">
                       <div>
                         <h6 class="mb-1">Sensor {{ index + 1 }}</h6>
-                        <small class="text-muted">{{ sensor.type || 'Type not selected' }}</small>
+                        <small class="text-muted">{{ sensor.sensor_type || 'Type not selected' }}</small>
                       </div>
                       <CButton
                         color="danger"
@@ -87,9 +87,21 @@
                     <CRow>
                       <CCol :md="6">
                         <div class="mb-3">
+                          <CFormLabel>Sensor Name <span class="text-danger">*</span></CFormLabel>
+                          <CFormInput
+                            v-model="sensor.name"
+                            type="text"
+                            required
+                            :disabled="loading"
+                            placeholder="e.g. Supply Air Temp"
+                          />
+                        </div>
+                      </CCol>
+                      <CCol :md="6">
+                        <div class="mb-3">
                           <CFormLabel>Sensor Type *</CFormLabel>
                           <CFormSelect
-                            v-model="sensor.type"
+                            v-model="sensor.sensor_type"
                             required
                             :disabled="loading"
                           >
@@ -100,22 +112,29 @@
                             <option value="pressure">Pressure</option>
                             <option value="air_quality">Air Quality</option>
                             <option value="co2">CO2</option>
-                            <option value="motion">Motion</option>
+                            <option value="motion">Motion / Occupancy</option>
                             <option value="light">Light</option>
+                            <option value="power">Power</option>
+                            <option value="flow">Airflow</option>
+                            <option value="setpoint">Setpoint</option>
+                            <option value="status">Status / Mode</option>
                           </CFormSelect>
                         </div>
                       </CCol>
+                    </CRow>
+
+                    <CRow>
                       <CCol :md="6">
                         <div class="mb-3">
                           <CFormLabel>Unit *</CFormLabel>
                           <CFormSelect
                             v-model="sensor.unit"
                             required
-                            :disabled="loading || !sensor.type"
+                            :disabled="loading || !sensor.sensor_type"
                           >
-                            <option value="">{{ sensor.type ? 'Select unit' : 'Select sensor type first' }}</option>
+                            <option value="">{{ sensor.sensor_type ? 'Select unit' : 'Select sensor type first' }}</option>
                             <option 
-                              v-for="unit in getAvailableUnits(sensor.type)" 
+                              v-for="unit in getAvailableUnits(sensor.sensor_type)" 
                               :key="unit" 
                               :value="unit"
                             >
@@ -124,33 +143,16 @@
                           </CFormSelect>
                         </div>
                       </CCol>
-                    </CRow>
-
-                    <CRow>
                       <CCol :md="6">
                         <div class="mb-3">
-                          <CFormLabel>Latitude *</CFormLabel>
+                          <CFormLabel>Payload Path <span class="text-muted">(Optional)</span></CFormLabel>
                           <CFormInput
-                            v-model.number="sensor.lat"
-                            type="number"
-                            step="0.000001"
-                            required
+                            v-model="sensor.payload_path"
+                            type="text"
                             :disabled="loading"
-                            placeholder="37.9755"
+                            placeholder="e.g. temperature, sensors.temp"
                           />
-                        </div>
-                      </CCol>
-                      <CCol :md="6">
-                        <div class="mb-3">
-                          <CFormLabel>Longitude *</CFormLabel>
-                          <CFormInput
-                            v-model.number="sensor.lon"
-                            type="number"
-                            step="0.000001"
-                            required
-                            :disabled="loading"
-                            placeholder="23.7348"
-                          />
+                          <small class="text-muted">JSON key path in the MQTT message.</small>
                         </div>
                       </CCol>
                     </CRow>
@@ -158,61 +160,12 @@
                     <CRow>
                       <CCol :md="6">
                         <div class="mb-3">
-                          <CFormLabel>Raw Data ID *</CFormLabel>
+                          <CFormLabel>External Sensor ID <span class="text-muted">(Optional)</span></CFormLabel>
                           <CFormInput
-                            v-model.number="sensor.raw_data_id"
-                            type="number"
-                            min="1"
-                            required
-                            :disabled="loading"
-                            placeholder="1"
-                          />
-                        </div>
-                      </CCol>
-                      <CCol :md="6">
-                        <div class="mb-3">
-                          <CFormLabel>Description</CFormLabel>
-                          <CFormInput
-                            v-model="sensor.description"
+                            v-model="sensor.external_sensor_id"
                             type="text"
                             :disabled="loading"
-                            placeholder="Optional sensor description"
-                          />
-                        </div>
-                      </CCol>
-                    </CRow>
-
-                    <CRow>
-                      <CCol :md="4">
-                        <div class="mb-3">
-                          <CFormLabel>Room</CFormLabel>
-                          <CFormInput
-                            v-model="sensor.room"
-                            type="text"
-                            :disabled="loading"
-                            placeholder="e.g. 101"
-                          />
-                        </div>
-                      </CCol>
-                      <CCol :md="4">
-                        <div class="mb-3">
-                          <CFormLabel>Zone</CFormLabel>
-                          <CFormInput
-                            v-model="sensor.zone"
-                            type="text"
-                            :disabled="loading"
-                            placeholder="e.g. Zone A"
-                          />
-                        </div>
-                      </CCol>
-                      <CCol :md="4">
-                        <div class="mb-3">
-                          <CFormLabel>Central Unit</CFormLabel>
-                          <CFormInput
-                            v-model="sensor.central_unit"
-                            type="text"
-                            :disabled="loading"
-                            placeholder="e.g. CU1"
+                            placeholder="BMS or external system ID"
                           />
                         </div>
                       </CCol>
@@ -363,8 +316,7 @@ export default {
           }
         )
         this.devices = response.data.map(device => ({
-          ...device,
-          location: `${device.central_unit || 'No Unit'} - ${device.zone || 'No Zone'} - ${device.room || 'No Room'}`
+          ...device
         }))
       } catch (error) {
         console.error('Failed to load devices:', error)
@@ -378,15 +330,11 @@ export default {
 
     addSensor() {
       this.form.sensors.push({
-        type: '',
-        lat: 37.9755,
-        lon: 23.7348,
-        raw_data_id: this.form.sensors.length + 1,
+        name: '',
+        sensor_type: '',
         unit: '',
-        room: '',
-        zone: '',
-        central_unit: '',
-        description: ''
+        payload_path: '',
+        external_sensor_id: ''
       })
     },
 
@@ -405,8 +353,12 @@ export default {
       }
       for (let i = 0; i < this.form.sensors.length; i++) {
         const sensor = this.form.sensors[i]
-        if (!sensor.type || !sensor.unit || !sensor.lat || !sensor.lon || !sensor.raw_data_id) {
-          this.showAlert('warning', `Please fill all required fields for Sensor ${i + 1}.`)
+        if (!sensor.name || !sensor.name.trim()) {
+          this.showAlert('warning', `Please enter a name for Sensor ${i + 1}.`)
+          return
+        }
+        if (!sensor.sensor_type || !sensor.unit) {
+          this.showAlert('warning', `Please fill all required fields for Sensor ${i + 1} (type and unit).`)
           return
         }
       }
@@ -415,7 +367,13 @@ export default {
       try {
         const payload = {
           device_id: Number.parseInt(this.form.device_id),
-          sensors: this.form.sensors
+          sensors: this.form.sensors.map(s => ({
+            name: s.name.trim(),
+            sensor_type: s.sensor_type,
+            unit: s.unit || null,
+            payload_path: s.payload_path || null,
+            external_sensor_id: s.external_sensor_id || null
+          }))
         }
         const jwtToken = this.getJwtToken()
         const headers = { 'Content-Type': 'application/json' }
