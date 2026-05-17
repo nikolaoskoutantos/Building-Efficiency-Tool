@@ -270,6 +270,7 @@ DbSession = Annotated[Session, Depends(get_db)]
     responses={
         400: {"description": "Invalid login request. Provide either username/password or Web3 signature data."},
         401: {"description": "Unauthorized: Invalid credentials or signature."},
+        403: {"description": "No active building access. Registration may still be pending approval."},
         500: {"description": "Internal server error during login"}
     }
 )
@@ -326,7 +327,7 @@ def handle_traditional_login(data: LoginRequest, request: Request, db_session: S
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="External authentication failed")
 
     # Create session/token
-    logger.info(f"Traditional login successful for user {user_info.get('username')}")
+    logger.info("Traditional login successful")
     wallet = normalize_wallet_address(user_info.get("wallet"))
     user = (
         db_session.query(User)
@@ -449,7 +450,7 @@ def _validate_web3_nonce_freshness(
         try:
             nonce_ts = int(parts[1])
         except (ValueError, IndexError):
-            logger.warning("Unparseable nonce timestamp nonce=%s", nonce[:64])
+            logger.warning("Unparseable nonce timestamp")  # nosonar
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
@@ -641,7 +642,7 @@ def verify_ethereum_signature(message: str, signature: str, expected_address: st
         # Compare addresses (case-insensitive)
         return recovered_address.lower() == expected_address.lower()
     except Exception as e:
-        print(f"Signature verification error: {e}")
+        logger.warning("Signature verification error", extra={"error": str(e).replace('\n', ' ').replace('\r', ' ')})
         return False
 
 def validate_message_format(message: str, address: str, nonce: str) -> bool:
@@ -972,9 +973,9 @@ def _resolve_or_create_building(data: RegisterRequest, db_session: Session) -> t
                 status_code=400,
                 detail=f"Building with ID {building_id} not found"
             )
-        logger.info(f"Using existing building: {building.name} (ID: {building.id})")
+        logger.info("Using existing building", extra={"building_id": building.id})
         return building, False
-    
+
     # Case 2: Create new building
     building_did = f"0x{hashlib.sha256(data.building_name.encode()).hexdigest()[:10]}"
     
@@ -998,7 +999,7 @@ def _resolve_or_create_building(data: RegisterRequest, db_session: Session) -> t
     db_session.add(building)
     db_session.commit()
     db_session.refresh(building)
-    logger.info(f"Created new building: {building.name} (ID: {building.id})")
+    logger.info("Created new building", extra={"building_id": building.id})
     return building, True
 
 def _resolve_or_create_user(wallet_address: str, db_session: Session) -> User:
@@ -1010,15 +1011,15 @@ def _resolve_or_create_user(wallet_address: str, db_session: Session) -> User:
             user.wallet_address = wallet_address
             db_session.commit()
             db_session.refresh(user)
-        logger.info(f"User with wallet {wallet_address} already exists (ID: {user.id})")
+        logger.info("Existing user resolved", extra={"user_id": user.id})
         return user
-    
+
     # Create new user
     user = User(wallet_address=wallet_address)
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    logger.info(f"Created new user with wallet {wallet_address} (ID: {user.id})")
+    logger.info("New user created", extra={"user_id": user.id})
     return user
 
 def _handle_user_building_mapping(
@@ -1137,7 +1138,6 @@ def _handle_pending_user_building_mapping(
 
 @router.post(
     "/register-web3",
-    response_model=RegisterResponse,
     responses={
         200: {"description": "Registration request submitted"},
         400: {"description": "Invalid request or captcha verification failed"},
@@ -1227,10 +1227,10 @@ def register_user(
         return _handle_user_building_mapping(user, building, data.role, building_created, db_session)
             
     except HTTPException as e:
-        logger.warning(f"Registration failed: {e.detail}")
+        logger.warning("Registration failed", extra={"detail": str(e.detail).replace('\n', ' ').replace('\r', ' ')})
         raise
     except Exception as e:
-        logger.exception(f"Registration error: {str(e)}")
+        logger.exception("Registration error", extra={"error": str(e).replace('\n', ' ').replace('\r', ' ')})
         db_session.rollback()
         raise HTTPException(
             status_code=500,

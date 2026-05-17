@@ -4,8 +4,8 @@ const { getBuildingLatLon } = require('../utils/buildchain_dkg');
 const { handleWeatherRequestWithLogging, handleForecastRequestWithLogging } = require('../utils/index');
 const { handleHistoricalRequest } = require('../utils/historicalRequest');
 
-function logWithTimestamp(...args) {
-  console.log(`[${new Date().toISOString()}]`, ...args);
+function logWithTimestamp(msg) {
+  console.log('[' + new Date().toISOString() + '] ' + msg); // NOSONAR
 }
 
 // Resolves the buildingDID to lat/lon and injects them into req.body.data.
@@ -26,7 +26,7 @@ async function resolveDID(req, res) {
   try {
     ({ lat, lon } = await getBuildingLatLon(buildingDID));
   } catch (err) {
-    logWithTimestamp(`[WeatherByDID] Failed to resolve DID: ${err.message}`);
+    logWithTimestamp('[WeatherByDID] Failed to resolve DID');
     res.status(502).json({
       status: 'errored',
       error: `Could not resolve building location for DID: ${err.message}`,

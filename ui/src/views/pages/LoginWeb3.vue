@@ -62,6 +62,11 @@ const isConnecting = ref(false)
 const isSigningMessage = ref(false)
 const lastProcessedAddress = ref<string | null>(null)
 
+function shouldAutoCloseAppKitModal() {
+  const ua = globalThis.navigator?.userAgent || ''
+  return !/Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+}
+
 function extractWalletProvider(value: unknown): Eip1193Provider | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -270,7 +275,9 @@ async function connectWallet() {
     await open()
 
     const { address, provider } = await waitForWalletReady()
-    await close?.()
+    if (shouldAutoCloseAppKitModal()) {
+      await close?.()
+    }
     await authenticateWalletAddress(address, provider)
   } catch (error) {
     console.error('Wallet authentication failed:', error)

@@ -159,6 +159,11 @@ const activeProvider = ref(null)
 const turnstileToken = ref('')
 const turnstileContainer = ref(null)
 const turnstileWidgetId = ref(null)
+
+function shouldAutoCloseAppKitModal() {
+  const ua = globalThis.navigator?.userAgent || ''
+  return !/Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+}
 const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || ''
 const addressSearch = ref('')
 const mapContainer = ref(null)
@@ -451,7 +456,9 @@ async function connectWallet() {
   try {
     await open()
     const { address, provider } = await waitForWalletReady()
-    await close?.()
+    if (shouldAutoCloseAppKitModal()) {
+      await close?.()
+    }
     connectedAddress.value = address
     activeProvider.value = provider
   } catch (error) {
